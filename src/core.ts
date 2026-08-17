@@ -1,0 +1,165 @@
+import { TokenCache, cacheKey } from "./cache.js";
+import { checkL0 } from "./l0/index.js";
+import type { Logger } from "./logger.js";
+import type { Params } from "./params.js";
+import { eligibleCount, evaluatePass } from "./pass.js";
+import type { TelegramSender } from "./push/telegram.js";
+import { QuotaTracker } from "./quota.js";
+import { buildSignal } from "./signal.js";
+import type { Chain, Decision, Signal } from "./types.js";
+
+export interface EvaluateResult {
+  decision: Decision;
+  reason: string;
+  signal?: Signal;
+  quotaSkipped?: boolean;
+}
+
+export interface PipelineDeps {
+  params: Params;
+  cache: TokenCache;
+  quota: QuotaTracker;
+  logger: Logger;
+  now: () => number;
+  fetchSecurity: (chain: Chain, ca: string) => Promise<Record<string, unknown> | null>;
+  telegram: TelegramSender;
+  emit: (signal: Signal) => void;
+}
+
+export class Pipeline {
+  private readonly pending = new Set<string>();
+  private readonly cooldownUntil = new Map<string, number>();
+  private readonly locks = new Map<string, Promise<void>>();
+
+  constructor(private readonly deps: PipelineDeps) {}
+
+  isPending(chain: Chain, ca: string): boolean {
+    const key = cacheKey(chain, ca);
+    return key ? this.pending.has(key) : false;
+  }
+
+  isCooling(chain: Chain, ca: string, now = this.deps.now()): boolean {
+    const key = cacheKey(chain, ca);
+    if (!key) return false;
+    const until = this.cooldownUntil.get(key);
+    return until != null && now < until;
+  }
+
+  markPending(chain: Chain, ca: string): void {
+    const key = cacheKey(chain, ca);
+    if (key) this.pending.add(key);
+  }
+
+  async onWrite(chain: Chain, ca: string): Promise<EvaluateResult> {
+    return this.evaluate(chain, ca);
+  }
+
+  async onWindowEnd(): Promise<EvaluateResult[]> {
+    const results: EvaluateResult[] = [];
+    this.deps.quota.resetWindow(this.deps.now());
+    for (const { chain, ca } of this.deps.quota.skippedList()) {
+      if (!this.deps.cache.has(chain, ca)) {
+        this.deps.quota.removeSkipped(chain, ca);
+        continue;
+      }
+      const result = await this.evaluate(chain, ca);
+      results.push(result);
+      if (result.quotaSkipped) continue;
+      this.deps.quota.removeSkipped(chain, ca);
+    }
+    return results;
+  }
+
+  async evaluate(chain: Chain, rawCa: string): Promise<EvaluateResult> {
+    const key = cacheKey(chain, rawCa);
+    if (!key) return { decision: "skip", reason: "invalid_ca" };
+    const result = await this.withLock(key, () => this.evaluateLocked(chain, rawCa, key));
+    if (result.decision === "push" && result.signal) {
+      const signal = result.signal;
+      queueMicrotask(() => {
+        try {
+          this.deps.emit(signal);
+        } catch {
+          // 订阅者失败忽略
+        }
+      });
+    }
+    return result;
+  }
+
+  private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.locks.set(
+      key,
+      prev.then(() => gate),
+    );
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.locks.get(key) === gate) this.locks.delete(key);
+    }
+  }
+
+  private async evaluateLocked(chain: Chain, rawCa: string, key: string): Promise<EvaluateResult> {
+    const { params, cache, quota, now: nowFn } = this.deps;
+    const now = nowFn();
+    cache.pruneTrades(chain, rawCa, now, params.cache.evidence_ttl_sec);
+    const entry = cache.get(chain, rawCa);
+    if (!entry) return { decision: "skip", reason: "not_in_cache" };
+
+    if (this.pending.has(key)) return { decision: "skip", reason: "pending" };
+    const cool = this.cooldownUntil.get(key);
+    if (cool != null && now < cool) return { decision: "skip", reason: "cooldown" };
+
+    const l0 = checkL0(entry, params, now);
+    if (l0.kind === "incomplete") {
+      const eligible = eligibleCount(entry, params, now);
+      if (eligible === 0) return { decision: "skip", reason: "l0_incomplete_no_eligible" };
+      if (!quota.canSecurity(chain, now)) {
+        quota.addSkipped(chain, entry.ca);
+        return { decision: "skip", reason: "security_quota", quotaSkipped: true };
+      }
+      quota.consumeSecurity(chain, now);
+      const fields = await this.deps.fetchSecurity(chain, entry.ca);
+      if (!fields) return { decision: "skip", reason: "security_failed" };
+      cache.mergeL0(chain, entry.ca, fields);
+      const again = checkL0(cache.get(chain, entry.ca)!, params, nowFn());
+      if (again.kind === "incomplete") return { decision: "skip", reason: "l0_still_incomplete" };
+      if (again.kind === "drop") {
+        quota.removeSkipped(chain, entry.ca);
+        return { decision: "drop", reason: again.reason };
+      }
+    } else if (l0.kind === "drop") {
+      quota.removeSkipped(chain, entry.ca);
+      return { decision: "drop", reason: l0.reason };
+    }
+
+    const pass = evaluatePass(cache.get(chain, entry.ca)!, params, nowFn());
+    if (pass.kind === "skip") return { decision: "skip", reason: pass.reason };
+    if (pass.kind === "drop") {
+      quota.removeSkipped(chain, entry.ca);
+      return { decision: "drop", reason: pass.reason };
+    }
+
+    const fresh = cache.get(chain, entry.ca)!;
+    const signal = buildSignal(fresh, params, nowFn());
+    if (!params.push.telegram_enabled) {
+      return { decision: "skip", reason: "telegram_disabled", signal };
+    }
+
+    this.pending.add(key);
+    const sent = await this.deps.telegram.sendSignal(signal);
+    this.pending.delete(key);
+    if (!sent) return { decision: "skip", reason: "telegram_failed", signal };
+
+    this.cooldownUntil.set(key, nowFn() + params.cache.push_cooldown_sec * 1000);
+    quota.removeSkipped(chain, entry.ca);
+    return { decision: "push", reason: "pass", signal };
+  }
+}

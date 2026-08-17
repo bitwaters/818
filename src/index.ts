@@ -1,0 +1,141 @@
+import { TokenCache, usableMarketCap } from "./cache.js";
+import { Pipeline } from "./core.js";
+import { isMainModule } from "./is-main.js";
+import { loadEnv } from "./env.js";
+import { createLogger } from "./logger.js";
+import { loadParams } from "./params.js";
+import { TelegramPusher } from "./push/telegram.js";
+import { QuotaTracker } from "./quota.js";
+import { fetchTokenSecurity } from "./sources/security.js";
+import { startHotSearches } from "./sources/hot-searches.js";
+import { startSignal } from "./sources/signal.js";
+import { startSmartmoney } from "./sources/smartmoney.js";
+import { withInFlight } from "./inflight.js";
+import { fetchTokenInfoMc } from "./sources/token-info.js";
+import { startTrending } from "./sources/trending.js";
+import { runSnapshot, sendDailySummary, sendHourlySummary, StatsStore } from "./stats.js";
+import { msUntilNextHour, msUntilNextMidnight, msUntilNextQuotaWindow } from "./time.js";
+import type { Signal } from "./types.js";
+
+export function start(opts?: { paramsPath?: string }): {
+  stop: () => void;
+  onSignal: (fn: (signal: Signal) => void) => void;
+} {
+  const params = loadParams(opts?.paramsPath);
+  const env = loadEnv();
+  const logger = createLogger();
+  const cache = new TokenCache();
+  const quota = new QuotaTracker(params.quota);
+  quota.resetWindow(Date.now());
+  const telegram = new TelegramPusher(
+    env.TELEGRAM_BOT_TOKEN,
+    env.TELEGRAM_CHAT_ID,
+    logger,
+    params.push.parse_mode,
+  );
+  const store = params.stats.enabled ? new StatsStore(params, logger) : null;
+  const listeners: Array<(signal: Signal) => void> = [];
+
+  const onSignal = (fn: (signal: Signal) => void) => {
+    listeners.push(fn);
+  };
+
+  const pipeline = new Pipeline({
+    params,
+    cache,
+    quota,
+    logger,
+    now: Date.now,
+    fetchSecurity: (chain, ca) => fetchTokenSecurity(env, chain, ca),
+    telegram,
+    emit: (signal) => {
+      for (const fn of listeners) {
+        try {
+          fn(signal);
+        } catch {
+          // 订阅者失败忽略，不回滚冷却
+        }
+      }
+    },
+  });
+
+  if (store) {
+    onSignal((signal) => {
+      const entry = cache.get(signal.chain, signal.ca);
+      const mc = entry
+        ? usableMarketCap(entry, Date.now(), params.cache.evidence_ttl_sec)
+        : signal.evidence.market_cap;
+      if (mc == null || !(mc > 0)) return;
+      store.insert(signal);
+    });
+  }
+
+  const shared = { params, env, cache, pipeline, logger };
+  const stops = [
+    startSmartmoney(shared),
+    startTrending(shared),
+    startSignal(shared),
+    startHotSearches(shared),
+  ];
+
+  let windowTimer: ReturnType<typeof setTimeout> | undefined;
+  const runWindow = withInFlight("quota-window", () => pipeline.onWindowEnd().then(() => undefined));
+  const scheduleWindow = () => {
+    windowTimer = setTimeout(() => {
+      runWindow();
+      scheduleWindow();
+    }, msUntilNextQuotaWindow(Date.now(), params.quota.window_sec));
+  };
+  scheduleWindow();
+
+  let snapshotTimer: ReturnType<typeof setInterval> | undefined;
+  let hourTimer: ReturnType<typeof setTimeout> | undefined;
+  let dayTimer: ReturnType<typeof setTimeout> | undefined;
+
+  if (store) {
+    const runSnap = withInFlight("snapshot", async () => {
+      await runSnapshot({
+        store,
+        params,
+        cache,
+        telegram,
+        fetchInfoMc: (chain, ca) => fetchTokenInfoMc(env, chain, ca),
+        now: Date.now(),
+      });
+    });
+    snapshotTimer = setInterval(runSnap, params.stats.snapshot_sec * 1000);
+
+    const scheduleHour = () => {
+      hourTimer = setTimeout(() => {
+        void sendHourlySummary({ store, params, telegram, now: Date.now() });
+        scheduleHour();
+      }, msUntilNextHour(Date.now(), params.stats.timezone));
+    };
+    const scheduleDay = () => {
+      dayTimer = setTimeout(() => {
+        void sendDailySummary({ store, params, telegram, now: Date.now() });
+        scheduleDay();
+      }, msUntilNextMidnight(Date.now(), params.stats.timezone));
+    };
+    scheduleHour();
+    scheduleDay();
+  }
+
+  logger.info({ chains: params.chains }, "meme-signal-pusher started");
+
+  return {
+    onSignal,
+    stop: () => {
+      for (const stop of stops) stop();
+      if (windowTimer) clearTimeout(windowTimer);
+      if (snapshotTimer) clearInterval(snapshotTimer);
+      if (hourTimer) clearTimeout(hourTimer);
+      if (dayTimer) clearTimeout(dayTimer);
+      store?.close();
+    },
+  };
+}
+
+if (isMainModule(import.meta.url)) {
+  start();
+}

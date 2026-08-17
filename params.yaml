@@ -1,0 +1,91 @@
+chains:
+  sol: true
+  bsc: true
+
+poll:
+  smartmoney: 5
+  trending: 10
+  hot_searches: 15
+  signal: 10
+
+intervals:
+  trending: ["1m", "5m"]
+
+cache:
+  evidence_ttl_sec: 180
+  push_cooldown_sec: 300
+
+sources:
+  smartmoney: true
+  trending: true
+  hot_searches: true
+  signal_12: true
+  signal_6: false
+  signal_7: false
+  signal_10: true
+
+pass:
+  visiting_can_boost: true
+
+flow:
+  min_smart_wallets: 2
+  require_net_buy: true
+  min_price_change_since_entry: 1.0
+
+tape:
+  min_volume_usd: 5000
+  min_swaps: 20
+
+attention:
+  min_visiting_count: 50
+  use_interval: "1m"
+
+l0_sol:
+  require_renounced_mint: true
+  require_renounced_freeze: true
+  rug_ratio_max: 0.3
+  drop_wash_trading: true
+  rat_trader_rate_max: 0.3
+  bundler_rate_max: 0.3
+  top10_holder_rate_max: 0.5
+  drop_signal_10: true
+
+l0_bsc:
+  require_not_honeypot: true
+  require_owner_renounced: true
+  require_open_source: false
+  require_lp_lock: false
+  sell_tax_max: 0.10
+  buy_tax_max: 0.10
+  rug_ratio_max: 0.3
+  drop_wash_trading: true
+  rat_trader_rate_max: 0.3
+  bundler_rate_max: 0.3
+  top10_holder_rate_max: 0.5
+  drop_signal_10: true
+
+push:
+  telegram_enabled: true
+  parse_mode: "HTML"
+  gmgn_token_url:
+    sol: "https://gmgn.ai/sol/token/{ca}"
+    bsc: "https://gmgn.ai/bsc/token/{ca}"
+
+stats:
+  enabled: true
+  sqlite_path: "data/signals.sqlite"
+  snapshot_sec: 60
+  track_hours: 24
+  hit_multiple: 1.5
+  milestone_step: 1.0
+  timezone: "Asia/Shanghai"
+
+quota:
+  window_sec: 10
+  security_per_round:
+    sol: 2
+    bsc: 2
+  snapshot_per_round:
+    sol: 2
+    bsc: 2
+  on_429: read_reset

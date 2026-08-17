@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+data/*.sqlite
+data/*.sqlite-*
+*.log
+.DS_Store
+
+# 本地测试与开发文档不入库
+test/
+docs/
+openspec/
+.cursor/
+.claude/
+*.md
