@@ -8,6 +8,50 @@ import type { Params } from "../params.js";
 import type { Chain } from "../types.js";
 import { tokenAddress, tokenChain } from "./parse.js";
 
+function asChain(raw: unknown): Chain | undefined {
+  return raw === "sol" || raw === "bsc" ? raw : undefined;
+}
+
+function rowsFromBlock(block: Record<string, unknown>): unknown[] {
+  for (const key of ["tokens", "list", "rank", "ranks", "items"]) {
+    const v = block[key];
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+/** Official body: `{ data: [{ chain, interval, tokens }] }`. Also accept `{ sol: [], bsc: [] }`. */
+export function parseHotSearchGroups(
+  data: unknown,
+  want: Chain[],
+): { chain: Chain; rows: unknown[] }[] {
+  const wanted = new Set(want);
+  const groups: { chain: Chain; rows: unknown[] }[] = [];
+  const root = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : undefined;
+  const payload = Array.isArray(root?.data) ? root.data : Array.isArray(data) ? data : (root?.data ?? data);
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      if (!item || typeof item !== "object") continue;
+      const block = item as Record<string, unknown>;
+      const chain = asChain(block.chain);
+      if (!chain || !wanted.has(chain)) continue;
+      const rows = rowsFromBlock(block);
+      if (rows.length > 0) groups.push({ chain, rows });
+    }
+    return groups;
+  }
+
+  if (payload && typeof payload === "object") {
+    const obj = payload as Record<string, unknown>;
+    for (const chain of want) {
+      const bucket = obj[chain];
+      if (Array.isArray(bucket) && bucket.length > 0) groups.push({ chain, rows: bucket });
+    }
+  }
+  return groups;
+}
+
 export async function pollHotSearches(opts: {
   params: Params;
   env: Env;
@@ -29,16 +73,7 @@ export async function pollHotSearches(opts: {
     }
     return;
   }
-  const groups: { chain: Chain; rows: unknown[] }[] = [];
-  const data = result.data;
-  if (data && typeof data === "object" && !Array.isArray(data)) {
-    const obj = data as Record<string, unknown>;
-    const inner = (obj.data && typeof obj.data === "object" ? obj.data : obj) as Record<string, unknown>;
-    for (const chain of chains) {
-      const bucket = inner[chain];
-      if (Array.isArray(bucket)) groups.push({ chain, rows: bucket });
-    }
-  }
+  const groups = parseHotSearchGroups(result.data, chains);
   if (groups.length === 0) {
     opts.logger.warn("hot-searches missing per-chain buckets; skip write");
     return;
