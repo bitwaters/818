@@ -1,6 +1,4 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { TokenCache, usableMarketCap } from "./cache.js";
 import type { Logger } from "./logger.js";
 import type { Params } from "./params.js";
@@ -47,16 +45,11 @@ export function tokenInfoMarketCap(data: unknown): number | null {
 }
 
 export class StatsStore {
-  private readonly db: Database.Database;
-
   constructor(
     private readonly params: Params,
     private readonly logger: Logger,
+    private readonly db: Database.Database,
   ) {
-    const path = params.stats.sqlite_path;
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new Database(path);
-    this.db.pragma("journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,9 +65,17 @@ export class StatsStore {
     `);
   }
 
+  hasRow(chain: Chain, ca: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 AS ok FROM signals WHERE chain = ? AND ca = ? LIMIT 1`)
+      .get(chain, ca) as { ok: number } | undefined;
+    return row != null;
+  }
+
   insert(signal: Signal): boolean {
     const mc = signal.evidence.market_cap;
     if (mc == null || !(mc > 0)) return false;
+    if (this.hasRow(signal.chain, signal.ca)) return false;
     this.db
       .prepare(
         `INSERT INTO signals (chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc)
@@ -89,6 +90,18 @@ export class StatsStore {
         max_mc: mc,
       });
     return true;
+  }
+
+  insertIfAbsent(signal: Signal): boolean {
+    try {
+      return this.insert(signal);
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : "insert_failed", chain: signal.chain },
+        "signals insert failed",
+      );
+      return false;
+    }
   }
 
   activeRows(now: number): SignalRow[] {
@@ -117,7 +130,7 @@ export class StatsStore {
   }
 
   close(): void {
-    this.db.close();
+    // 连接由调用方 close，避免与 PushedLedger 双关
   }
 }
 

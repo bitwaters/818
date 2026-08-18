@@ -8,6 +8,8 @@ export function createLogger() {
         "GMGN_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_CHAT_ID",
+        "TELEGRAM_GROUP_ID",
+        "TELEGRAM_CHANNEL_ID",
         "req.headers.X-APIKEY",
         "headers.X-APIKEY",
         "*.apiKey",

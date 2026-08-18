@@ -11,6 +11,8 @@ services:
       GMGN_API_KEY: ${GMGN_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_GROUP_ID: ${TELEGRAM_GROUP_ID:-}
+      TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
     volumes:
       - ./params.yaml:/app/params.yaml:ro
       - ./data:/app/data

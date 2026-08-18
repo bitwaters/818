@@ -1,10 +1,11 @@
 import { TokenCache, usableMarketCap } from "./cache.js";
 import { Pipeline } from "./core.js";
 import { isMainModule } from "./is-main.js";
-import { loadEnv } from "./env.js";
+import { loadEnv, telegramDestinations } from "./env.js";
 import { createLogger } from "./logger.js";
 import { loadParams } from "./params.js";
 import { TelegramPusher } from "./push/telegram.js";
+import { PushedLedger } from "./pushed.js";
 import { QuotaTracker } from "./quota.js";
 import { fetchTokenSecurity } from "./sources/security.js";
 import { startHotSearches } from "./sources/hot-searches.js";
@@ -13,6 +14,7 @@ import { startSmartmoney } from "./sources/smartmoney.js";
 import { withInFlight } from "./inflight.js";
 import { fetchTokenInfoMc } from "./sources/token-info.js";
 import { startTrending } from "./sources/trending.js";
+import { openSqlite } from "./sqlite.js";
 import { runSnapshot, sendDailySummary, sendHourlySummary, StatsStore } from "./stats.js";
 import { msUntilNextHour, msUntilNextMidnight, msUntilNextQuotaWindow } from "./time.js";
 import type { Signal } from "./types.js";
@@ -27,13 +29,16 @@ export function start(opts?: { paramsPath?: string }): {
   const cache = new TokenCache();
   const quota = new QuotaTracker(params.quota);
   quota.resetWindow(Date.now());
+  const dests = telegramDestinations(env);
   const telegram = new TelegramPusher(
     env.TELEGRAM_BOT_TOKEN,
-    env.TELEGRAM_CHAT_ID,
+    dests,
     logger,
     params.push.parse_mode,
   );
-  const store = params.stats.enabled ? new StatsStore(params, logger) : null;
+  const sqlite = openSqlite(params.stats.sqlite_path);
+  const store = params.stats.enabled ? new StatsStore(params, logger, sqlite) : null;
+  const pushed = new PushedLedger(sqlite, dests);
   const listeners: Array<(signal: Signal) => void> = [];
 
   const onSignal = (fn: (signal: Signal) => void) => {
@@ -48,27 +53,32 @@ export function start(opts?: { paramsPath?: string }): {
     now: Date.now,
     fetchSecurity: (chain, ca) => fetchTokenSecurity(env, chain, ca),
     telegram,
+    hasPushedAll: (chain, ca) => pushed.hasAll(chain, ca),
+    hasAnyPushed: (chain, ca) => pushed.hasAny(chain, ca),
+    pendingDests: (chain, ca) => pushed.pendingDests(chain, ca),
+    markPushedDest: (chain, ca, chatId) => pushed.markDest(chain, ca, chatId, Date.now()),
+    ensureInserted: (signal) => {
+      if (!store) return;
+      const entry = cache.get(signal.chain, signal.ca);
+      const mc =
+        signal.evidence.market_cap ??
+        (entry ? usableMarketCap(entry, Date.now(), params.cache.evidence_ttl_sec) : undefined);
+      if (mc == null || !(mc > 0)) return;
+      store.insertIfAbsent({
+        ...signal,
+        evidence: { ...signal.evidence, market_cap: mc },
+      });
+    },
     emit: (signal) => {
       for (const fn of listeners) {
         try {
           fn(signal);
         } catch {
-          // 订阅者失败忽略，不回滚冷却
+          // 订阅者失败忽略，不回滚 pushed
         }
       }
     },
   });
-
-  if (store) {
-    onSignal((signal) => {
-      const entry = cache.get(signal.chain, signal.ca);
-      const mc = entry
-        ? usableMarketCap(entry, Date.now(), params.cache.evidence_ttl_sec)
-        : signal.evidence.market_cap;
-      if (mc == null || !(mc > 0)) return;
-      store.insert(signal);
-    });
-  }
 
   const shared = { params, env, cache, pipeline, logger };
   const stops = [
@@ -121,7 +131,7 @@ export function start(opts?: { paramsPath?: string }): {
     scheduleDay();
   }
 
-  logger.info({ chains: params.chains }, "meme-signal-pusher started");
+  logger.info({ chains: params.chains, telegramDestinations: dests.length }, "meme-signal-pusher started");
 
   return {
     onSignal,
@@ -132,6 +142,7 @@ export function start(opts?: { paramsPath?: string }): {
       if (hourTimer) clearTimeout(hourTimer);
       if (dayTimer) clearTimeout(dayTimer);
       store?.close();
+      sqlite.close();
     },
   };
 }

@@ -1,4 +1,4 @@
-import { TokenCache, cacheKey } from "./cache.js";
+import { TokenCache, cacheKey, normalizeCa } from "./cache.js";
 import { checkL0 } from "./l0/index.js";
 import type { Logger } from "./logger.js";
 import type { Params } from "./params.js";
@@ -24,6 +24,11 @@ export interface PipelineDeps {
   fetchSecurity: (chain: Chain, ca: string) => Promise<Record<string, unknown> | null>;
   telegram: TelegramSender;
   emit: (signal: Signal) => void;
+  hasPushedAll: (chain: Chain, ca: string) => boolean;
+  hasAnyPushed: (chain: Chain, ca: string) => boolean;
+  pendingDests: (chain: Chain, ca: string) => string[];
+  markPushedDest: (chain: Chain, ca: string, chatId: string) => void;
+  ensureInserted: (signal: Signal) => void;
 }
 
 export class Pipeline {
@@ -41,6 +46,8 @@ export class Pipeline {
   isCooling(chain: Chain, ca: string, now = this.deps.now()): boolean {
     const key = cacheKey(chain, ca);
     if (!key) return false;
+    const normalized = normalizeCa(chain, ca);
+    if (normalized && this.deps.hasPushedAll(chain, normalized)) return true;
     const until = this.cooldownUntil.get(key);
     return until != null && now < until;
   }
@@ -114,6 +121,10 @@ export class Pipeline {
     if (!entry) return { decision: "skip", reason: "not_in_cache" };
 
     if (this.pending.has(key)) return { decision: "skip", reason: "pending" };
+    if (this.deps.hasPushedAll(chain, entry.ca)) {
+      this.deps.ensureInserted(buildSignal(entry, params, now));
+      return { decision: "skip", reason: "already_pushed" };
+    }
     const cool = this.cooldownUntil.get(key);
     if (cool != null && now < cool) return { decision: "skip", reason: "cooldown" };
 
@@ -153,10 +164,21 @@ export class Pipeline {
       return { decision: "skip", reason: "telegram_disabled", signal };
     }
 
+    const pending = this.deps.pendingDests(chain, entry.ca);
+    if (pending.length === 0) {
+      this.deps.ensureInserted(signal);
+      return { decision: "skip", reason: "already_pushed", signal };
+    }
+
+    const firstDelivery = !this.deps.hasAnyPushed(chain, entry.ca);
     this.pending.add(key);
-    const sent = await this.deps.telegram.sendSignal(signal);
+    const sent = await this.deps.telegram.sendSignal(signal, pending);
     this.pending.delete(key);
-    if (!sent) return { decision: "skip", reason: "telegram_failed", signal };
+    for (const chatId of sent.okIds) this.deps.markPushedDest(chain, entry.ca, chatId);
+    if (sent.okIds.length === 0) return { decision: "skip", reason: "telegram_failed", signal };
+
+    this.deps.ensureInserted(signal);
+    if (!firstDelivery) return { decision: "skip", reason: "dest_retry", signal };
 
     this.cooldownUntil.set(key, nowFn() + params.cache.push_cooldown_sec * 1000);
     quota.removeSkipped(chain, entry.ca);

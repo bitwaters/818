@@ -154,7 +154,8 @@ async function dispatch<T>(req: GmgnRequest): Promise<GmgnResult<T>> {
   if (!res.ok) {
     return { ok: false, kind: "error", status: res.status, message: "http_error" };
   }
-  return { ok: true, data: body as T, status: res.status };
+  const ok = { ok: true as const, data: body as T, status: res.status };
+  return ok;
 }
 
 export async function gmgnRequest<T = unknown>(req: GmgnRequest): Promise<GmgnResult<T>> {
@@ -167,20 +168,21 @@ export async function gmgnRequest<T = unknown>(req: GmgnRequest): Promise<GmgnRe
 }
 
 export function unwrapList(data: unknown): unknown[] {
+  return unwrapListDepth(data, 0);
+}
+
+const LIST_KEYS = ["rank", "ranks", "list", "tokens", "items", "result"] as const;
+
+function unwrapListDepth(data: unknown, depth: number): unknown[] {
+  if (depth > 6) return [];
   if (Array.isArray(data)) return data;
-  if (data && typeof data === "object") {
-    const obj = data as Record<string, unknown>;
-    for (const key of ["data", "list", "rank", "ranks", "tokens", "items", "result"]) {
-      const v = obj[key];
-      if (Array.isArray(v)) return v;
-      if (v && typeof v === "object") {
-        const inner = v as Record<string, unknown>;
-        for (const k of ["list", "rank", "ranks", "tokens", "items"]) {
-          if (Array.isArray(inner[k])) return inner[k] as unknown[];
-        }
-      }
-    }
+  if (!data || typeof data !== "object") return [];
+  const obj = data as Record<string, unknown>;
+  for (const key of LIST_KEYS) {
+    const v = obj[key];
+    if (Array.isArray(v)) return v;
   }
+  if (obj.data !== undefined) return unwrapListDepth(obj.data, depth + 1);
   return [];
 }
 

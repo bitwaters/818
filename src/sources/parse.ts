@@ -56,10 +56,15 @@ export function parseTrade(row: Record<string, unknown>, now: number): SmartTrad
     wallet = strField(row.maker_info as Record<string, unknown>, "address");
   }
   const side = parseSide(row.side ?? row.buy_or_sell ?? row.event);
-  const priceChange = numField(row, "price_change", "price_change_percent", "profit") ?? 0;
+  const priceChange = numField(row, "price_change", "price_change_percent", "profit");
   if (!wallet || !side) return null;
   const ts = numField(row, "timestamp", "ts", "time", "created_at") ?? now;
-  return { wallet, side, price_change: priceChange, ts: ts > 1e12 ? ts : ts * 1000 };
+  return {
+    wallet,
+    side,
+    ...(priceChange != null ? { price_change: priceChange } : {}),
+    ts: ts > 1e12 ? ts : ts * 1000,
+  };
 }
 
 export function parseTokenInfoMc(data: unknown): number | null {

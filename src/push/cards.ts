@@ -10,7 +10,7 @@ export function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function ticker(signal: Signal): string {
+function ticker(signal: { symbol: string; ca: string }): string {
   if (signal.symbol) return `$${escapeHtml(signal.symbol)}`;
   return `$${escapeHtml(signal.ca.slice(0, 6))}`;
 }
@@ -26,47 +26,70 @@ function fmtUsd(n: number): string {
   return fmtNum(n);
 }
 
+function fmtPct(n: number): string {
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${fmtNum(n)}%`;
+}
+
 function taxPct(value: unknown): string {
   const n = asNumber(value) ?? 0;
   return fmtNum(n * 100);
+}
+
+function joinParts(parts: Array<string | undefined>): string | undefined {
+  const xs = parts.filter((p): p is string => Boolean(p));
+  if (xs.length === 0) return undefined;
+  return xs.join("  ·  ");
 }
 
 export function renderSignalCard(signal: Signal): string {
   const emoji = signal.chain === "sol" ? "🟣" : "🟡";
   const chain = signal.chain === "sol" ? "SOL" : "BSC";
   const ev = signal.evidence;
-  const lines = [
-    `${emoji} ${chain}  ${ticker(signal)}`,
-    `<code>${escapeHtml(signal.ca)}</code>`,
+  const lines: string[] = [
+    `${emoji} <b>${chain}</b>  <b>${ticker(signal)}</b>`,
     "",
-    `💰 聪明钱 ${ev.smart_wallets} 地址净买`,
-    `📈 1m +${fmtNum(ev.price_change_1m)}% · 买 ${ev.buys} / 卖 ${ev.sells} · $${fmtUsd(ev.volume)} · ${ev.swaps}笔`,
+    `<code>${escapeHtml(signal.ca)}</code>`,
   ];
-  if (ev.visiting_count != null) {
-    lines.push(`👁 1m ${ev.visiting_count}`);
-  }
-  if (ev.market_cap != null || ev.liquidity != null) {
-    const mc = ev.market_cap != null ? `MC $${fmtUsd(ev.market_cap)}` : "";
-    const lp = ev.liquidity != null ? `LP $${fmtUsd(ev.liquidity)}` : "";
-    lines.push(`📊 ${[mc, lp].filter(Boolean).join(" · ")}`);
-  }
+
+  const size = joinParts([
+    ev.market_cap != null ? `💰 市值 $${fmtUsd(ev.market_cap)}` : undefined,
+    ev.liquidity != null ? `💧 流动性 $${fmtUsd(ev.liquidity)}` : undefined,
+  ]);
+  if (size) lines.push(size);
+
+  const change = joinParts([
+    `📈 1分钟 <b>${fmtPct(ev.price_change_1m)}</b>`,
+    ev.price_change_5m != null ? `⏱ 5分钟 ${fmtPct(ev.price_change_5m)}` : undefined,
+  ]);
+  if (change) lines.push(change);
+
+  lines.push(`🟢 买入 ${ev.buys}  ·  🔴 卖出 ${ev.sells}`);
+  lines.push(`💵 成交额 $${fmtUsd(ev.volume)}  ·  🔢 笔数 ${ev.swaps}`);
+
+  const attention = joinParts([
+    ev.visiting_count != null ? `👁 浏览 ${ev.visiting_count}` : undefined,
+    `👥 聪明钱 ${ev.smart_wallets}`,
+  ]);
+  if (attention) lines.push(attention);
+
   if (signal.chain === "sol") {
     const mint = isYes(signal.l0.renounced_mint) ? "✓" : "✗";
     const freeze = isYes(signal.l0.renounced_freeze_account) ? "✓" : "✗";
     const rug = fmtNum(asNumber(signal.l0.rug_ratio) ?? 0);
-    lines.push(`🛡 mint${mint}  freeze${freeze}  ·  rug ${rug}`);
+    lines.push(`🛡 Mint ${mint}  Freeze ${freeze}  Rug ${rug}`);
   } else {
     const owner = isYes(signal.l0.owner_renounced) || isYes(signal.l0.is_renounced) ? "✓" : "✗";
-    lines.push(
-      `🛡 非貔貅  ·  owner${owner}  ·  买${taxPct(signal.l0.buy_tax)}% / 卖${taxPct(signal.l0.sell_tax)}%`,
-    );
+    lines.push(`🛡 非貔貅  ·  Owner ${owner}`);
+    lines.push(`🛡 买入税 ${taxPct(signal.l0.buy_tax)}%  ·  卖出税 ${taxPct(signal.l0.sell_tax)}%`);
   }
   return lines.join("\n");
 }
 
 export function signalButton(signal: Signal): { text: string; url: string } {
   const emoji = signal.chain === "sol" ? "🟣" : "🟡";
-  return { text: `${emoji} 打开 GMGN`, url: signal.links.gmgn };
+  const chain = signal.chain === "sol" ? "SOL" : "BSC";
+  return { text: `${emoji} ${chain} · GMGN`, url: signal.links.gmgn };
 }
 
 export function renderMilestoneCard(
@@ -77,13 +100,13 @@ export function renderMilestoneCard(
   step: number,
 ): string {
   const emoji = signal.chain === "sol" ? "🟣" : "🟡";
+  const chain = signal.chain === "sol" ? "SOL" : "BSC";
   const gainPct = k * step * 100;
   const multiple = maxMc / entryMc;
-  const name = signal.symbol ? `$${escapeHtml(signal.symbol)}` : `$${escapeHtml(signal.ca.slice(0, 6))}`;
   return [
-    `🚀 ${emoji}  ${name}  +${fmtNum(gainPct)}%`,
+    `🚀 ${emoji} ${chain}  ${ticker(signal)}  +${fmtNum(gainPct)}%`,
     `<code>${escapeHtml(signal.ca)}</code>`,
-    `入场 MC $${fmtUsd(entryMc)} → 最高 MC $${fmtUsd(maxMc)}  (${fmtNum(multiple)}x)`,
+    `入场市值 $${fmtUsd(entryMc)} → 最高市值 $${fmtUsd(maxMc)}  (${fmtNum(multiple)}x)`,
   ].join("\n");
 }
 

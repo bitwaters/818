@@ -23,7 +23,7 @@ export function lastSides(
   for (const trade of last.values()) {
     if (trade.side === "buy") {
       buyWallets += 1;
-      if (trade.price_change >= minPriceChange) eligible += 1;
+      if (trade.price_change == null || trade.price_change >= minPriceChange) eligible += 1;
     } else {
       sellWallets += 1;
     }
@@ -81,7 +81,6 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     params.pass.visiting_can_boost &&
     sides.eligible >= 1 &&
     sides.eligible < params.flow.min_smart_wallets &&
-    net &&
     visitingOk(entry.visiting_count, params.attention.min_visiting_count);
 
   if (cluster || boost) return { kind: "pass", cluster, boost, eligible: sides.eligible };

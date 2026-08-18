@@ -5,7 +5,8 @@ export type Decision = "push" | "drop" | "skip";
 export interface SmartTrade {
   wallet: string;
   side: "buy" | "sell";
-  price_change: number;
+  /** 接口未返回时缺省；缺省则最后一笔买单计入 eligible */
+  price_change?: number;
   ts: number;
 }
 
