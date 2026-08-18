@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Agent, fetch as undiciFetch } from "undici";
 
 export const GMGN_HOST = "https://openapi.gmgn.ai";
+export const GMGN_MIN_GAP_MS = 400;
+export const GMGN_MIN_PAUSE_MS = 60_000;
 
 const ipv4Agent = new Agent({ connect: { family: 4 } });
 
 export type GmgnOk<T> = { ok: true; data: T; status: number };
-export type GmgnRateLimited = { ok: false; kind: "rate_limited"; resetAt: number };
+export type GmgnRateLimited = { ok: false; kind: "rate_limited"; resetAt: number; paused?: boolean };
 export type GmgnErr = { ok: false; kind: "error"; status?: number; message?: string };
 export type GmgnResult<T = unknown> = GmgnOk<T> | GmgnRateLimited | GmgnErr;
 
@@ -17,6 +19,61 @@ export interface GmgnRequest {
   body?: unknown;
   apiKey: string;
   fetchImpl?: (url: URL | string, init?: Parameters<typeof undiciFetch>[1]) => Promise<Response>;
+}
+
+let pausedUntil = 0;
+let pauseLogged = false;
+let lastDispatchAt = 0;
+let tail: Promise<unknown> = Promise.resolve();
+
+export function resetGmgnHttp(): void {
+  pausedUntil = 0;
+  pauseLogged = false;
+  lastDispatchAt = 0;
+  tail = Promise.resolve();
+}
+
+export function gmgnPausedUntil(): number {
+  return pausedUntil;
+}
+
+export function shouldLogGmgnFail(result: GmgnResult): boolean {
+  if (result.ok) return false;
+  return result.kind !== "rate_limited" || !result.paused;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logPause(until: number): void {
+  if (pauseLogged) return;
+  pauseLogged = true;
+  console.warn(
+    JSON.stringify({
+      level: 40,
+      time: Date.now(),
+      msg: "gmgn paused until reset",
+      resetAt: until,
+    }),
+  );
+}
+
+function logResume(): void {
+  console.warn(
+    JSON.stringify({
+      level: 30,
+      time: Date.now(),
+      msg: "gmgn resume",
+    }),
+  );
+}
+
+function armPause(resetAt: number, now: number): number {
+  const until = resetAt > now ? resetAt : now + GMGN_MIN_PAUSE_MS;
+  if (until > pausedUntil) pausedUntil = until;
+  logPause(pausedUntil);
+  return pausedUntil;
 }
 
 export function parseResetAt(
@@ -35,7 +92,19 @@ export function parseResetAt(
   return raw > 1e12 ? raw : raw * 1000;
 }
 
-export async function gmgnRequest<T = unknown>(req: GmgnRequest): Promise<GmgnResult<T>> {
+async function dispatch<T>(req: GmgnRequest): Promise<GmgnResult<T>> {
+  const now = Date.now();
+  if (now < pausedUntil) {
+    return { ok: false, kind: "rate_limited", resetAt: pausedUntil, paused: true };
+  }
+  if (pauseLogged) {
+    pauseLogged = false;
+    logResume();
+  }
+  const wait = lastDispatchAt + GMGN_MIN_GAP_MS - now;
+  if (wait > 0) await sleep(wait);
+  lastDispatchAt = Date.now();
+
   const url = new URL(req.path, GMGN_HOST);
   const timestamp = String(Math.floor(Date.now() / 1000));
   const clientId = randomUUID();
@@ -78,12 +147,23 @@ export async function gmgnRequest<T = unknown>(req: GmgnRequest): Promise<GmgnRe
   }
 
   if (res.status === 429) {
-    return { ok: false, kind: "rate_limited", resetAt: parseResetAt(res.headers, body) };
+    const resetAt = parseResetAt(res.headers, body);
+    armPause(resetAt, Date.now());
+    return { ok: false, kind: "rate_limited", resetAt };
   }
   if (!res.ok) {
     return { ok: false, kind: "error", status: res.status, message: "http_error" };
   }
   return { ok: true, data: body as T, status: res.status };
+}
+
+export async function gmgnRequest<T = unknown>(req: GmgnRequest): Promise<GmgnResult<T>> {
+  const run = tail.then(() => dispatch<T>(req), () => dispatch<T>(req));
+  tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 export function unwrapList(data: unknown): unknown[] {

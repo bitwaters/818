@@ -1,7 +1,7 @@
 import type { TokenCache } from "../cache.js";
 import type { Pipeline } from "../core.js";
 import type { Env } from "../env.js";
-import { gmgnRequest, numField, unwrapList } from "../gmgn/http.js";
+import { gmgnRequest, numField, shouldLogGmgnFail, unwrapList } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
@@ -35,7 +35,9 @@ export async function pollSignal(opts: {
     apiKey: opts.env.GMGN_API_KEY,
   });
   if (!result.ok) {
-    opts.logger.warn({ kind: result.kind, chain: opts.chain }, "signal failed");
+    if (shouldLogGmgnFail(result)) {
+      opts.logger.warn({ kind: result.kind, chain: opts.chain }, "signal failed");
+    }
     return;
   }
   const now = opts.now();

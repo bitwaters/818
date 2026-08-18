@@ -1,7 +1,7 @@
 import type { TokenCache } from "../cache.js";
 import type { Pipeline } from "../core.js";
 import type { Env } from "../env.js";
-import { gmgnRequest, unwrapList } from "../gmgn/http.js";
+import { gmgnRequest, shouldLogGmgnFail, unwrapList } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
@@ -23,7 +23,9 @@ export async function pollSmartmoney(opts: {
     apiKey: opts.env.GMGN_API_KEY,
   });
   if (!result.ok) {
-    opts.logger.warn({ kind: result.kind, chain: opts.chain }, "smartmoney failed");
+    if (shouldLogGmgnFail(result)) {
+      opts.logger.warn({ kind: result.kind, chain: opts.chain }, "smartmoney failed");
+    }
     return;
   }
   const now = opts.now();

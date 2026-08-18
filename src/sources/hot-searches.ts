@@ -1,7 +1,7 @@
 import type { TokenCache } from "../cache.js";
 import type { Pipeline } from "../core.js";
 import type { Env } from "../env.js";
-import { gmgnRequest, numField } from "../gmgn/http.js";
+import { gmgnRequest, numField, shouldLogGmgnFail } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
@@ -24,7 +24,9 @@ export async function pollHotSearches(opts: {
     apiKey: opts.env.GMGN_API_KEY,
   });
   if (!result.ok) {
-    opts.logger.warn({ kind: result.kind }, "hot-searches failed");
+    if (shouldLogGmgnFail(result)) {
+      opts.logger.warn({ kind: result.kind }, "hot-searches failed");
+    }
     return;
   }
   const groups: { chain: Chain; rows: unknown[] }[] = [];
