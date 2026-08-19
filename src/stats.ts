@@ -141,11 +141,11 @@ export class StatsStore {
         buy_wallets: ev.buy_wallets,
         sell_wallets: ev.sell_wallets,
         visiting: ev.visiting_count ?? null,
-        volume: ev.volume,
-        swaps: ev.swaps,
-        buys: ev.buys,
-        sells: ev.sells,
-        pc_1m: ev.price_change_1m,
+        volume: ev.volume ?? null,
+        swaps: ev.swaps ?? null,
+        buys: ev.buys ?? null,
+        sells: ev.sells ?? null,
+        pc_1m: ev.price_change_1m ?? null,
         liquidity: ev.liquidity ?? null,
       });
     return true;

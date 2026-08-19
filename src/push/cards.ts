@@ -59,13 +59,20 @@ export function renderSignalCard(signal: Signal): string {
   if (size) lines.push(size);
 
   const change = joinParts([
-    `📈 1分钟 <b>${fmtPct(ev.price_change_1m)}</b>`,
+    ev.price_change_1m != null ? `📈 1分钟 <b>${fmtPct(ev.price_change_1m)}</b>` : undefined,
     ev.price_change_5m != null ? `⏱ 5分钟 ${fmtPct(ev.price_change_5m)}` : undefined,
   ]);
   if (change) lines.push(change);
 
-  lines.push(`🟢 买入 ${ev.buys}  ·  🔴 卖出 ${ev.sells}`);
-  lines.push(`💵 成交额 $${fmtUsd(ev.volume)}  ·  🔢 笔数 ${ev.swaps}`);
+  if (ev.buys != null || ev.sells != null) {
+    lines.push(`🟢 买入 ${ev.buys ?? "—"}  ·  🔴 卖出 ${ev.sells ?? "—"}`);
+  }
+  if (ev.volume != null || ev.swaps != null) {
+    const vol = ev.volume != null ? `💵 成交额 $${fmtUsd(ev.volume)}` : undefined;
+    const swaps = ev.swaps != null ? `🔢 笔数 ${ev.swaps}` : undefined;
+    const row = joinParts([vol, swaps]);
+    if (row) lines.push(row);
+  }
 
   const attention = joinParts([
     ev.visiting_count != null ? `👁 浏览 ${ev.visiting_count}` : undefined,

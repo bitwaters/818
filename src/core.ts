@@ -122,7 +122,7 @@ export class Pipeline {
 
     if (this.pending.has(key)) return { decision: "skip", reason: "pending" };
     if (this.deps.hasPushedAll(chain, entry.ca)) {
-      this.deps.ensureInserted(buildSignal(entry, params, now));
+      this.deps.ensureInserted(buildSignal(entry, params, now, evaluatePass(entry, params, now)));
       return { decision: "skip", reason: "already_pushed" };
     }
     const cool = this.cooldownUntil.get(key);
@@ -151,7 +151,7 @@ export class Pipeline {
       return { decision: "drop", reason: l0.reason };
     }
 
-    const pass = evaluatePass(cache.get(chain, entry.ca)!, params, nowFn());
+    const pass = evaluatePass(cache.get(chain, entry.ca)!, params, now);
     if (pass.kind === "skip") return { decision: "skip", reason: pass.reason };
     if (pass.kind === "drop") {
       quota.removeSkipped(chain, entry.ca);
@@ -159,7 +159,7 @@ export class Pipeline {
     }
 
     const fresh = cache.get(chain, entry.ca)!;
-    const signal = buildSignal(fresh, params, nowFn());
+    const signal = buildSignal(fresh, params, now, pass);
     if (!params.push.telegram_enabled) {
       return { decision: "skip", reason: "telegram_disabled", signal };
     }

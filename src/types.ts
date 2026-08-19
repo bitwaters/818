@@ -41,12 +41,12 @@ export interface SignalEvidence {
   buy_wallets: number;
   sell_wallets: number;
   pass_kind?: PassKind;
-  price_change_1m: number;
+  price_change_1m?: number;
   price_change_5m?: number;
-  buys: number;
-  sells: number;
-  volume: number;
-  swaps: number;
+  buys?: number;
+  sells?: number;
+  volume?: number;
+  swaps?: number;
   visiting_count?: number;
   market_cap?: number;
   liquidity?: number;
