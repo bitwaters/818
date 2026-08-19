@@ -6,7 +6,7 @@ import { renderDailySummary, renderHourlySummary, renderMilestoneCard } from "./
 import type { TelegramSender } from "./push/telegram.js";
 import { SnapshotQuota } from "./quota.js";
 import { dateKey, hourLabel, shiftDateKey } from "./time.js";
-import type { Chain, Signal } from "./types.js";
+import type { Chain, PassKind, Signal } from "./types.js";
 
 export interface SignalRow {
   id: number;
@@ -18,6 +18,43 @@ export interface SignalRow {
   max_mc: number;
   last_milestone: number;
   calib_mc: number | null;
+  pass_kind: PassKind | null;
+  eligible: number | null;
+  eligible_strict: number | null;
+  buy_wallets: number | null;
+  sell_wallets: number | null;
+  visiting: number | null;
+  volume: number | null;
+  swaps: number | null;
+  buys: number | null;
+  sells: number | null;
+  pc_1m: number | null;
+  liquidity: number | null;
+}
+
+const REPLAY_COLUMNS: Array<[string, string]> = [
+  ["pass_kind", "TEXT"],
+  ["eligible", "INTEGER"],
+  ["eligible_strict", "INTEGER"],
+  ["buy_wallets", "INTEGER"],
+  ["sell_wallets", "INTEGER"],
+  ["visiting", "INTEGER"],
+  ["volume", "REAL"],
+  ["swaps", "INTEGER"],
+  ["buys", "INTEGER"],
+  ["sells", "INTEGER"],
+  ["pc_1m", "REAL"],
+  ["liquidity", "REAL"],
+];
+
+function ensureReplayColumns(db: Database.Database): void {
+  const existing = new Set(
+    (db.prepare(`PRAGMA table_info(signals)`).all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  for (const [name, type] of REPLAY_COLUMNS) {
+    if (existing.has(name)) continue;
+    db.exec(`ALTER TABLE signals ADD COLUMN ${name} ${type}`);
+  }
 }
 
 export function impliedMc(entryMc: number, infoMc: number, calibMc: number): number {
@@ -63,6 +100,8 @@ export class StatsStore {
         calib_mc REAL
       )
     `);
+    ensureReplayColumns(this.db);
+    this.logger.info({ replay: REPLAY_COLUMNS.map(([name]) => name) }, "signals replay columns ready");
   }
 
   hasRow(chain: Chain, ca: string): boolean {
@@ -73,13 +112,21 @@ export class StatsStore {
   }
 
   insert(signal: Signal): boolean {
-    const mc = signal.evidence.market_cap;
+    const ev = signal.evidence;
+    const mc = ev.market_cap;
     if (mc == null || !(mc > 0)) return false;
     if (this.hasRow(signal.chain, signal.ca)) return false;
     this.db
       .prepare(
-        `INSERT INTO signals (chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc)
-         VALUES (@chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, NULL)`,
+        `INSERT INTO signals (
+           chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc,
+           pass_kind, eligible, eligible_strict, buy_wallets, sell_wallets,
+           visiting, volume, swaps, buys, sells, pc_1m, liquidity
+         ) VALUES (
+           @chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, NULL,
+           @pass_kind, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
+           @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @liquidity
+         )`,
       )
       .run({
         chain: signal.chain,
@@ -88,6 +135,18 @@ export class StatsStore {
         ts: signal.ts,
         entry_mc: mc,
         max_mc: mc,
+        pass_kind: ev.pass_kind ?? null,
+        eligible: ev.smart_wallets,
+        eligible_strict: ev.eligible_strict,
+        buy_wallets: ev.buy_wallets,
+        sell_wallets: ev.sell_wallets,
+        visiting: ev.visiting_count ?? null,
+        volume: ev.volume,
+        swaps: ev.swaps,
+        buys: ev.buys,
+        sells: ev.sells,
+        pc_1m: ev.price_change_1m,
+        liquidity: ev.liquidity ?? null,
       });
     return true;
   }

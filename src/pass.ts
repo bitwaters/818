@@ -4,6 +4,8 @@ import type { CacheEntry, SmartTrade, Tape1m } from "./types.js";
 
 export interface LastSides {
   eligible: number;
+  /** 仅 price_change ≥ 阈值；缺字段不计 */
+  eligible_strict: number;
   buyWallets: number;
   sellWallets: number;
 }
@@ -18,17 +20,19 @@ export function lastSides(
   const last = new Map<string, SmartTrade>();
   for (const trade of windowed) last.set(trade.wallet, trade);
   let eligible = 0;
+  let eligible_strict = 0;
   let buyWallets = 0;
   let sellWallets = 0;
   for (const trade of last.values()) {
     if (trade.side === "buy") {
       buyWallets += 1;
       if (trade.price_change == null || trade.price_change >= minPriceChange) eligible += 1;
+      if (trade.price_change != null && trade.price_change >= minPriceChange) eligible_strict += 1;
     } else {
       sellWallets += 1;
     }
   }
-  return { eligible, buyWallets, sellWallets };
+  return { eligible, eligible_strict, buyWallets, sellWallets };
 }
 
 export function netBuyOk(sides: LastSides, requireNetBuy: boolean): boolean {

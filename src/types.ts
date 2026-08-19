@@ -33,8 +33,14 @@ export interface CacheEntry {
   l0: Record<string, unknown>;
 }
 
+export type PassKind = "cluster" | "boost";
+
 export interface SignalEvidence {
   smart_wallets: number;
+  eligible_strict: number;
+  buy_wallets: number;
+  sell_wallets: number;
+  pass_kind?: PassKind;
   price_change_1m: number;
   price_change_5m?: number;
   buys: number;
