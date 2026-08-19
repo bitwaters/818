@@ -55,6 +55,17 @@ export function usableVisiting(
   return entry.visiting_count;
 }
 
+export function usablePriceChange5m(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): number | undefined {
+  if (entry.price_change_5m == null) return undefined;
+  if (entry.price_change_5m_written_at == null) return undefined;
+  if (now - entry.price_change_5m_written_at >= ttlSec * 1000) return undefined;
+  return entry.price_change_5m;
+}
+
 export function tradesInWindow(
   trades: SmartTrade[],
   now: number,
@@ -139,11 +150,28 @@ export class TokenCache {
     return entry;
   }
 
-  writePriceChange5m(chain: Chain, rawCa: string, pct: number): CacheEntry | null {
+  writePriceChange5m(chain: Chain, rawCa: string, pct: number, now: number): CacheEntry | null {
     const entry = this.upsert(chain, rawCa);
     if (!entry) return null;
     entry.price_change_5m = pct;
+    entry.price_change_5m_written_at = now;
+    this.emitMutate(entry);
     return entry;
+  }
+
+  /** 本轮 5m 热门未出现的 token 清掉 5m 涨幅，避免过线一直用发臭的动量。 */
+  clearAbsentPriceChange5m(chain: Chain, presentCas: Set<string>): CacheEntry[] {
+    const cleared: CacheEntry[] = [];
+    for (const entry of this.map.values()) {
+      if (entry.chain !== chain) continue;
+      if (entry.price_change_5m == null) continue;
+      if (presentCas.has(entry.ca)) continue;
+      entry.price_change_5m = undefined;
+      entry.price_change_5m_written_at = undefined;
+      this.emitMutate(entry);
+      cleared.push(entry);
+    }
+    return cleared;
   }
 
   writeMarketCap(chain: Chain, rawCa: string, marketCap: number, now: number): CacheEntry | null {

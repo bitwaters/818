@@ -1,4 +1,4 @@
-import { usableMarketCap, usableVisiting } from "./cache.js";
+import { usableMarketCap, usablePriceChange5m, usableVisiting } from "./cache.js";
 import type { Params } from "./params.js";
 import { evaluatePass, lastSides, type PassResult } from "./pass.js";
 import type { CacheEntry, PassKind, Signal } from "./types.js";
@@ -27,6 +27,7 @@ export function buildSignal(
   );
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
   const visiting = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
+  const pc5 = usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
   const kind = passKindOf(pass);
   return {
     chain: entry.chain,
@@ -40,7 +41,7 @@ export function buildSignal(
       sell_wallets: sides.sellWallets,
       ...(kind ? { pass_kind: kind } : {}),
       ...(tape.price_change_1m != null ? { price_change_1m: tape.price_change_1m } : {}),
-      ...(entry.price_change_5m != null ? { price_change_5m: entry.price_change_5m } : {}),
+      ...(pc5 != null ? { price_change_5m: pc5 } : {}),
       ...(tape.buys != null ? { buys: tape.buys } : {}),
       ...(tape.sells != null ? { sells: tape.sells } : {}),
       ...(tape.volume != null ? { volume: tape.volume } : {}),

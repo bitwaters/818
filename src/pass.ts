@@ -1,4 +1,4 @@
-import { tradesInWindow, usableVisiting } from "./cache.js";
+import { tradesInWindow, usablePriceChange5m, usableVisiting } from "./cache.js";
 import type { Params } from "./params.js";
 import type { CacheEntry, SmartTrade, Tape1m } from "./types.js";
 
@@ -53,11 +53,15 @@ export function tapeComplete(tape: Partial<Tape1m> | undefined): tape is Tape1m 
 
 export function tapeOk(tape: Tape1m, params: Params["tape"]): boolean {
   return (
-    tape.price_change_1m > 0 &&
+    tape.price_change_1m >= params.min_price_change_1m &&
     tape.buys > tape.sells &&
     tape.volume >= params.min_volume_usd &&
     tape.swaps >= params.min_swaps
   );
+}
+
+export function tape5mOk(pc5m: number, min: number): boolean {
+  return pc5m > min;
 }
 
 export function visitingOk(count: number | undefined, min: number): boolean {
@@ -65,7 +69,7 @@ export function visitingOk(count: number | undefined, min: number): boolean {
 }
 
 export type PassResult =
-  | { kind: "skip"; reason: "tape_incomplete" }
+  | { kind: "skip"; reason: "tape_incomplete" | "visiting_incomplete" }
   | { kind: "drop"; reason: string }
   | { kind: "pass"; cluster: boolean; boost: boolean; eligible: number };
 
@@ -77,20 +81,20 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     params.flow.min_price_change_since_entry,
   );
   const net = netBuyOk(sides, params.flow.require_net_buy);
+  const vis = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
+  const pc5 = usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
   if (!tapeComplete(entry.tape)) return { kind: "skip", reason: "tape_incomplete" };
   if (!tapeOk(entry.tape, params.tape)) return { kind: "drop", reason: "tape" };
+  if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
+    return { kind: "drop", reason: "tape_5m" };
+  }
+  if (vis == null) return { kind: "skip", reason: "visiting_incomplete" };
+  if (!visitingOk(vis, params.attention.min_visiting_count)) {
+    return { kind: "drop", reason: "visiting" };
+  }
 
   const cluster = sides.eligible >= params.flow.min_smart_wallets && net;
-  const boost =
-    params.pass.visiting_can_boost &&
-    sides.eligible >= 1 &&
-    sides.eligible < params.flow.min_smart_wallets &&
-    visitingOk(
-      usableVisiting(entry, now, params.cache.evidence_ttl_sec),
-      params.attention.min_visiting_count,
-    );
-
-  if (cluster || boost) return { kind: "pass", cluster, boost, eligible: sides.eligible };
+  if (cluster) return { kind: "pass", cluster: true, boost: false, eligible: sides.eligible };
   return { kind: "drop", reason: "pass_formula" };
 }
 

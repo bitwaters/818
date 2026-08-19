@@ -25,6 +25,7 @@ export interface CacheEntry {
   trades: SmartTrade[];
   tape?: Partial<Tape1m>;
   price_change_5m?: number;
+  price_change_5m_written_at?: number;
   visiting_count?: number;
   visiting_written_at?: number;
   market_cap?: number;

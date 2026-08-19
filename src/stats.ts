@@ -29,6 +29,7 @@ export interface SignalRow {
   buys: number | null;
   sells: number | null;
   pc_1m: number | null;
+  pc_5m: number | null;
   liquidity: number | null;
 }
 
@@ -44,6 +45,7 @@ const REPLAY_COLUMNS: Array<[string, string]> = [
   ["buys", "INTEGER"],
   ["sells", "INTEGER"],
   ["pc_1m", "REAL"],
+  ["pc_5m", "REAL"],
   ["liquidity", "REAL"],
 ];
 
@@ -121,11 +123,11 @@ export class StatsStore {
         `INSERT INTO signals (
            chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc,
            pass_kind, eligible, eligible_strict, buy_wallets, sell_wallets,
-           visiting, volume, swaps, buys, sells, pc_1m, liquidity
+           visiting, volume, swaps, buys, sells, pc_1m, pc_5m, liquidity
          ) VALUES (
            @chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, NULL,
            @pass_kind, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
-           @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @liquidity
+           @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @pc_5m, @liquidity
          )`,
       )
       .run({
@@ -146,6 +148,7 @@ export class StatsStore {
         buys: ev.buys ?? null,
         sells: ev.sells ?? null,
         pc_1m: ev.price_change_1m ?? null,
+        pc_5m: ev.price_change_5m ?? null,
         liquidity: ev.liquidity ?? null,
       });
     return true;

@@ -25,7 +25,7 @@ sources:
   signal_10: true
 
 pass:
-  visiting_can_boost: true
+  visiting_can_boost: false  # 过线已不读此键，只认 cluster
 
 flow:
   min_smart_wallets: 2
@@ -35,9 +35,12 @@ flow:
 tape:
   min_volume_usd: 5000
   min_swaps: 20
+  min_price_change_1m: 20
+  # 有新鲜 5m 时必须 > 该值（0 即必须为正）；不在 5m 热门榜则不否决
+  min_price_change_5m: 0
 
 attention:
-  min_visiting_count: 50
+  min_visiting_count: 100
   use_interval: "1m"
 
 l0_sol:

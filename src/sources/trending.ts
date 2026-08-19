@@ -5,8 +5,38 @@ import { gmgnRequest, numField, shouldLogGmgnFail, unwrapList } from "../gmgn/ht
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
-import type { Chain } from "../types.js";
+import type { CacheEntry, Chain } from "../types.js";
 import { pickL0Snapshot, tokenAddress } from "./parse.js";
+
+export function ingestTrending5m(opts: {
+  cache: TokenCache;
+  chain: Chain;
+  rows: unknown[];
+  now: number;
+}): { present: Set<string>; cleared: CacheEntry[]; skippedClear: boolean } {
+  const present = new Set<string>();
+  for (const item of opts.rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const ca = tokenAddress(row);
+    if (!ca) continue;
+    const entry = opts.cache.upsert(opts.chain, ca);
+    if (!entry) continue;
+    present.add(entry.ca);
+    const pct = numField(row, "price_change_percent", "price_change_5m", "change5m");
+    if (pct != null) opts.cache.writePriceChange5m(opts.chain, ca, pct, opts.now);
+    const symbol = typeof row.symbol === "string" ? row.symbol : undefined;
+    if (symbol) opts.cache.writeSymbol(opts.chain, ca, symbol);
+  }
+  if (present.size === 0) {
+    return { present, cleared: [], skippedClear: true };
+  }
+  return {
+    present,
+    cleared: opts.cache.clearAbsentPriceChange5m(opts.chain, present),
+    skippedClear: false,
+  };
+}
 
 export async function pollTrending(opts: {
   params: Params;
@@ -30,34 +60,39 @@ export async function pollTrending(opts: {
     return;
   }
   const now = opts.now();
-  for (const item of unwrapList(result.data)) {
+  const rows = unwrapList(result.data);
+  if (opts.interval === "5m") {
+    const ingest = ingestTrending5m({ cache: opts.cache, chain: opts.chain, rows, now });
+    if (ingest.skippedClear) {
+      opts.logger.warn({ chain: opts.chain, rows: rows.length }, "trending 5m empty rank; skip clear");
+    }
+    for (const ca of ingest.present) await opts.pipeline.onWrite(opts.chain, ca);
+    for (const entry of ingest.cleared) await opts.pipeline.onWrite(entry.chain, entry.ca);
+    return;
+  }
+  if (opts.interval !== "1m") return;
+  for (const item of rows) {
     if (!item || typeof item !== "object") continue;
     const row = item as Record<string, unknown>;
     const ca = tokenAddress(row);
     if (!ca) continue;
     const symbol = typeof row.symbol === "string" ? row.symbol : undefined;
     const liquidity = numField(row, "liquidity");
-    if (opts.interval === "1m") {
-      opts.cache.writeTape1m(
-        opts.chain,
-        ca,
-        {
-          price_change_1m: numField(row, "price_change_percent", "price_change_1m", "change1m"),
-          buys: numField(row, "buys"),
-          sells: numField(row, "sells"),
-          volume: numField(row, "volume"),
-          swaps: numField(row, "swaps"),
-        },
-        { symbol, liquidity },
-      );
-      const mc = numField(row, "market_cap", "usd_market_cap");
-      if (mc != null) opts.cache.writeMarketCap(opts.chain, ca, mc, now);
-      opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row));
-    } else if (opts.interval === "5m") {
-      const pct = numField(row, "price_change_percent", "price_change_5m", "change5m");
-      if (pct != null) opts.cache.writePriceChange5m(opts.chain, ca, pct);
-      if (symbol) opts.cache.writeSymbol(opts.chain, ca, symbol);
-    }
+    opts.cache.writeTape1m(
+      opts.chain,
+      ca,
+      {
+        price_change_1m: numField(row, "price_change_percent", "price_change_1m", "change1m"),
+        buys: numField(row, "buys"),
+        sells: numField(row, "sells"),
+        volume: numField(row, "volume"),
+        swaps: numField(row, "swaps"),
+      },
+      { symbol, liquidity },
+    );
+    const mc = numField(row, "market_cap", "usd_market_cap");
+    if (mc != null) opts.cache.writeMarketCap(opts.chain, ca, mc, now);
+    opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row));
     await opts.pipeline.onWrite(opts.chain, ca);
   }
 }

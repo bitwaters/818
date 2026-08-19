@@ -43,6 +43,8 @@ const ParamsSchema = z.object({
   tape: z.object({
     min_volume_usd: z.number().nonnegative(),
     min_swaps: z.number().nonnegative(),
+    min_price_change_1m: z.number().nonnegative(),
+    min_price_change_5m: z.number().nonnegative(),
   }),
   attention: z.object({
     min_visiting_count: z.number().nonnegative(),
