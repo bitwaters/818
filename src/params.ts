@@ -89,6 +89,28 @@ const ParamsSchema = z.object({
     milestone_step: z.number().positive(),
     timezone: z.string().min(1),
   }),
+  /** 缺整个 trace 或个别键时用默认值，避免旧 yaml 把进程打挂；默认关闭轨迹。 */
+  trace: z
+    .object({
+      enabled: z.boolean().default(false),
+      min_gap_ms: z.number().int().min(0).default(5000),
+      mc_change_pct: z.number().positive().default(0.02),
+      watch_min_sec: z.number().int().positive().default(21600),
+      watch_idle_sec: z.number().int().positive().default(7200),
+      watch_max_sec: z.number().int().positive().default(43200),
+      retain_hours: z.number().positive().default(72),
+      flush_ms: z.number().int().positive().default(1000),
+    })
+    .default({
+      enabled: false,
+      min_gap_ms: 5000,
+      mc_change_pct: 0.02,
+      watch_min_sec: 21600,
+      watch_idle_sec: 7200,
+      watch_max_sec: 43200,
+      retain_hours: 72,
+      flush_ms: 1000,
+    }),
   quota: z.object({
     window_sec: z.number().int().min(1),
     security_per_round: z.object({

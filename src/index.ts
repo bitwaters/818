@@ -16,6 +16,7 @@ import { fetchTokenInfoMc } from "./sources/token-info.js";
 import { startTrending } from "./sources/trending.js";
 import { openSqlite } from "./sqlite.js";
 import { runSnapshot, sendDailySummary, sendHourlySummary, StatsStore } from "./stats.js";
+import { TickRecorder } from "./trace.js";
 import { msUntilNextHour, msUntilNextMidnight, msUntilNextQuotaWindow } from "./time.js";
 import type { Signal } from "./types.js";
 
@@ -26,7 +27,6 @@ export function start(opts?: { paramsPath?: string }): {
   const params = loadParams(opts?.paramsPath);
   const env = loadEnv();
   const logger = createLogger();
-  const cache = new TokenCache();
   const quota = new QuotaTracker(params.quota);
   quota.resetWindow(Date.now());
   const dests = telegramDestinations(env);
@@ -39,6 +39,10 @@ export function start(opts?: { paramsPath?: string }): {
   const sqlite = openSqlite(params.stats.sqlite_path);
   const store = params.stats.enabled ? new StatsStore(params, logger, sqlite) : null;
   const pushed = new PushedLedger(sqlite, dests);
+  const trace = params.trace.enabled ? new TickRecorder(sqlite, params, logger) : null;
+  const cache = new TokenCache((entry) => {
+    trace?.note(entry, Date.now(), pushed.hasAll(entry.chain, entry.ca));
+  });
   const listeners: Array<(signal: Signal) => void> = [];
 
   const onSignal = (fn: (signal: Signal) => void) => {
@@ -97,6 +101,7 @@ export function start(opts?: { paramsPath?: string }): {
     }, msUntilNextQuotaWindow(Date.now(), params.quota.window_sec));
   };
   scheduleWindow();
+  trace?.start();
 
   let snapshotTimer: ReturnType<typeof setInterval> | undefined;
   let hourTimer: ReturnType<typeof setTimeout> | undefined;
@@ -131,7 +136,10 @@ export function start(opts?: { paramsPath?: string }): {
     scheduleDay();
   }
 
-  logger.info({ chains: params.chains, telegramDestinations: dests.length }, "meme-signal-pusher started");
+  logger.info(
+    { chains: params.chains, telegramDestinations: dests.length, trace: params.trace.enabled },
+    "meme-signal-pusher started",
+  );
 
   return {
     onSignal,
@@ -141,6 +149,7 @@ export function start(opts?: { paramsPath?: string }): {
       if (snapshotTimer) clearInterval(snapshotTimer);
       if (hourTimer) clearTimeout(hourTimer);
       if (dayTimer) clearTimeout(dayTimer);
+      trace?.stop();
       store?.close();
       sqlite.close();
     },

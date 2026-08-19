@@ -36,6 +36,25 @@ export function usableMarketCap(
   return mc;
 }
 
+export function isVisitingFresh(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): boolean {
+  if (entry.visiting_count == null) return false;
+  if (entry.visiting_written_at == null) return false;
+  return now - entry.visiting_written_at < ttlSec * 1000;
+}
+
+export function usableVisiting(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): number | undefined {
+  if (!isVisitingFresh(entry, now, ttlSec)) return undefined;
+  return entry.visiting_count;
+}
+
 export function tradesInWindow(
   trades: SmartTrade[],
   now: number,
@@ -47,6 +66,16 @@ export function tradesInWindow(
 
 export class TokenCache {
   private readonly map = new Map<string, CacheEntry>();
+
+  constructor(private readonly onMutate?: (entry: CacheEntry) => void) {}
+
+  private emitMutate(entry: CacheEntry): void {
+    try {
+      this.onMutate?.(entry);
+    } catch {
+      // 轨迹失败不得挡住源写入
+    }
+  }
 
   get(chain: Chain, rawCa: string): CacheEntry | undefined {
     const key = cacheKey(chain, rawCa);
@@ -91,6 +120,7 @@ export class TokenCache {
     if (!entry) return null;
     entry.trades.push(...trades);
     if (window) entry.trades = tradesInWindow(entry.trades, window.now, window.ttlSec);
+    this.emitMutate(entry);
     return entry;
   }
 
@@ -105,6 +135,7 @@ export class TokenCache {
     entry.tape = { ...entry.tape, ...tape };
     if (extras?.symbol) entry.symbol = extras.symbol;
     if (extras?.liquidity != null) entry.liquidity = extras.liquidity;
+    this.emitMutate(entry);
     return entry;
   }
 
@@ -120,14 +151,32 @@ export class TokenCache {
     if (!entry) return null;
     entry.market_cap = marketCap;
     entry.market_cap_written_at = now;
+    this.emitMutate(entry);
     return entry;
   }
 
-  writeVisiting(chain: Chain, rawCa: string, count: number): CacheEntry | null {
+  writeVisiting(chain: Chain, rawCa: string, count: number, now: number): CacheEntry | null {
     const entry = this.upsert(chain, rawCa);
     if (!entry) return null;
     entry.visiting_count = count;
+    entry.visiting_written_at = now;
+    this.emitMutate(entry);
     return entry;
+  }
+
+  /** 本轮热搜未出现的 token 清掉浏览，避免过线/轨迹一直用发臭的人数。 */
+  clearAbsentVisiting(chain: Chain, presentCas: Set<string>): CacheEntry[] {
+    const cleared: CacheEntry[] = [];
+    for (const entry of this.map.values()) {
+      if (entry.chain !== chain) continue;
+      if (entry.visiting_count == null) continue;
+      if (presentCas.has(entry.ca)) continue;
+      entry.visiting_count = undefined;
+      entry.visiting_written_at = undefined;
+      this.emitMutate(entry);
+      cleared.push(entry);
+    }
+    return cleared;
   }
 
   writeSignal10(chain: Chain, rawCa: string, at: number): CacheEntry | null {

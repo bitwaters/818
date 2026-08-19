@@ -37,7 +37,7 @@ export function parseHotSearchGroups(
       const chain = asChain(block.chain);
       if (!chain || !wanted.has(chain)) continue;
       const rows = rowsFromBlock(block);
-      if (rows.length > 0) groups.push({ chain, rows });
+      groups.push({ chain, rows });
     }
     return groups;
   }
@@ -46,7 +46,7 @@ export function parseHotSearchGroups(
     const obj = payload as Record<string, unknown>;
     for (const chain of want) {
       const bucket = obj[chain];
-      if (Array.isArray(bucket) && bucket.length > 0) groups.push({ chain, rows: bucket });
+      if (Array.isArray(bucket)) groups.push({ chain, rows: bucket });
     }
   }
   return groups;
@@ -58,6 +58,7 @@ export async function pollHotSearches(opts: {
   cache: TokenCache;
   pipeline: Pipeline;
   logger: Logger;
+  now?: () => number;
 }): Promise<void> {
   const chains = (["sol", "bsc"] as const).filter((c) => opts.params.chains[c]);
   if (chains.length === 0) return;
@@ -78,7 +79,9 @@ export async function pollHotSearches(opts: {
     opts.logger.warn("hot-searches missing per-chain buckets; skip write");
     return;
   }
+  const now = (opts.now ?? Date.now)();
   for (const { chain: groupChain, rows } of groups) {
+    const present = new Set<string>();
     for (const item of rows) {
       if (!item || typeof item !== "object") continue;
       const row = item as Record<string, unknown>;
@@ -87,8 +90,12 @@ export async function pollHotSearches(opts: {
       if (!ca || visiting == null) continue;
       const chain = tokenChain(row, groupChain);
       if (!opts.params.chains[chain]) continue;
-      opts.cache.writeVisiting(chain, ca, visiting);
+      const written = opts.cache.writeVisiting(chain, ca, visiting, now);
+      if (written && chain === groupChain) present.add(written.ca);
       await opts.pipeline.onWrite(chain, ca);
+    }
+    for (const entry of opts.cache.clearAbsentVisiting(groupChain, present)) {
+      await opts.pipeline.onWrite(entry.chain, entry.ca);
     }
   }
 }

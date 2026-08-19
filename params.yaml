@@ -80,6 +80,16 @@ stats:
   milestone_step: 1.0
   timezone: "Asia/Shanghai"
 
+trace:
+  enabled: true
+  min_gap_ms: 5000
+  mc_change_pct: 0.02
+  watch_min_sec: 21600
+  watch_idle_sec: 7200
+  watch_max_sec: 43200
+  retain_hours: 72
+  flush_ms: 1000
+
 quota:
   window_sec: 10
   security_per_round:

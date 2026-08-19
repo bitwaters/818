@@ -26,6 +26,7 @@ export interface CacheEntry {
   tape?: Partial<Tape1m>;
   price_change_5m?: number;
   visiting_count?: number;
+  visiting_written_at?: number;
   market_cap?: number;
   market_cap_written_at?: number;
   liquidity?: number;

@@ -1,4 +1,4 @@
-import { tradesInWindow } from "./cache.js";
+import { tradesInWindow, usableVisiting } from "./cache.js";
 import type { Params } from "./params.js";
 import type { CacheEntry, SmartTrade, Tape1m } from "./types.js";
 
@@ -85,7 +85,10 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     params.pass.visiting_can_boost &&
     sides.eligible >= 1 &&
     sides.eligible < params.flow.min_smart_wallets &&
-    visitingOk(entry.visiting_count, params.attention.min_visiting_count);
+    visitingOk(
+      usableVisiting(entry, now, params.cache.evidence_ttl_sec),
+      params.attention.min_visiting_count,
+    );
 
   if (cluster || boost) return { kind: "pass", cluster, boost, eligible: sides.eligible };
   return { kind: "drop", reason: "pass_formula" };

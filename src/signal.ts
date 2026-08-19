@@ -1,4 +1,4 @@
-import { usableMarketCap } from "./cache.js";
+import { usableMarketCap, usableVisiting } from "./cache.js";
 import type { Params } from "./params.js";
 import { evaluatePass, lastSides, type PassResult } from "./pass.js";
 import type { CacheEntry, PassKind, Signal } from "./types.js";
@@ -26,6 +26,7 @@ export function buildSignal(
     params.flow.min_price_change_since_entry,
   );
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
+  const visiting = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
   const kind = passKindOf(pass);
   return {
     chain: entry.chain,
@@ -44,7 +45,7 @@ export function buildSignal(
       ...(tape.sells != null ? { sells: tape.sells } : {}),
       ...(tape.volume != null ? { volume: tape.volume } : {}),
       ...(tape.swaps != null ? { swaps: tape.swaps } : {}),
-      ...(entry.visiting_count != null ? { visiting_count: entry.visiting_count } : {}),
+      ...(visiting != null ? { visiting_count: visiting } : {}),
       ...(mc != null ? { market_cap: mc } : {}),
       ...(entry.liquidity != null ? { liquidity: entry.liquidity } : {}),
     },
