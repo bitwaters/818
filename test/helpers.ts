@@ -29,6 +29,8 @@ export function testParams(mut?: (p: Params) => void): Params {
   const params = structuredClone(BASE_PARAMS);
   // 大多数金样例只验证原有单一规则；新增生产过滤由专项用例覆盖。
   params.pass.signal_enabled = { sol: true, bsc: true };
+  params.hot_pool.enabled = false;
+  params.tape.min_price_change_1m = 20;
   params.tape.max_price_change_1m = 0;
   params.tape.require_price_change_5m = false;
   params.tape.min_volume_market_cap_ratio = 0;

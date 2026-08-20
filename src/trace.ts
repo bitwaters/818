@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import {
+  TokenCache,
   tradesInWindow,
   usableLiquidity,
   usableL0,
@@ -8,6 +9,13 @@ import {
   usableTape1m,
   usableVisiting,
 } from "./cache.js";
+import {
+  hotPoolLane,
+  hotPoolPrice5m,
+  isFreshRank1m,
+  isFreshRank5m,
+  momentumTier,
+} from "./hotpool.js";
 import type { Logger } from "./logger.js";
 import type { Params } from "./params.js";
 import { lastSides } from "./pass.js";
@@ -70,6 +78,13 @@ interface BufferedCandidate {
   rule_version: string;
   has_usd: 0 | 1;
   pc_5m: number | null;
+  hot_pool_lane: string | null;
+  momentum_tier: string | null;
+  rank_1m: number | null;
+  rank_5m: number | null;
+  rank_1m_seen_at: number | null;
+  rank_5m_seen_at: number | null;
+  created_at: number | null;
 }
 
 function watchKey(chain: Chain, ca: string): string {
@@ -179,7 +194,7 @@ function snapshotOf(
 
 function ensureColumn(
   db: Database.Database,
-  table: "ticks" | "candidates",
+  table: "ticks" | "candidates" | "decision_events",
   name: string,
   ddl: string,
 ): void {
@@ -218,8 +233,10 @@ export class TickRecorder {
   private readonly insert;
   private readonly upsertCandidate;
   private readonly insertDecision;
+  private readonly insertPoolSnapshot;
   private readonly pruneStmt;
   private readonly pruneDecisionsStmt;
+  private readonly prunePoolSnapshotsStmt;
   private readonly decisionStates = new Map<string, { fingerprint: string; ts: number }>();
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private pruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -276,12 +293,26 @@ export class TickRecorder {
         rule_version TEXT NOT NULL DEFAULT 'legacy',
         has_usd INTEGER NOT NULL DEFAULT 0,
         pc_5m REAL,
+        hot_pool_lane TEXT,
+        momentum_tier TEXT,
+        rank_1m INTEGER,
+        rank_5m INTEGER,
+        rank_1m_seen_at INTEGER,
+        rank_5m_seen_at INTEGER,
+        created_at INTEGER,
         PRIMARY KEY (chain, ca)
       )
     `);
     ensureColumn(this.db, "candidates", "rule_version", "TEXT NOT NULL DEFAULT 'legacy'");
     ensureColumn(this.db, "candidates", "has_usd", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn(this.db, "candidates", "pc_5m", "REAL");
+    ensureColumn(this.db, "candidates", "hot_pool_lane", "TEXT");
+    ensureColumn(this.db, "candidates", "momentum_tier", "TEXT");
+    ensureColumn(this.db, "candidates", "rank_1m", "INTEGER");
+    ensureColumn(this.db, "candidates", "rank_5m", "INTEGER");
+    ensureColumn(this.db, "candidates", "rank_1m_seen_at", "INTEGER");
+    ensureColumn(this.db, "candidates", "rank_5m_seen_at", "INTEGER");
+    ensureColumn(this.db, "candidates", "created_at", "INTEGER");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS decision_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -310,7 +341,34 @@ export class TickRecorder {
         mc REAL,
         liquidity REAL,
         l0_json TEXT NOT NULL,
-        shadow_json TEXT NOT NULL
+        shadow_json TEXT NOT NULL,
+        hot_pool_lane TEXT,
+        momentum_tier TEXT,
+        rank_1m INTEGER,
+        rank_5m INTEGER,
+        rank_1m_seen_at INTEGER,
+        rank_5m_seen_at INTEGER,
+        created_at INTEGER
+      )
+    `);
+    ensureColumn(this.db, "decision_events", "hot_pool_lane", "TEXT");
+    ensureColumn(this.db, "decision_events", "momentum_tier", "TEXT");
+    ensureColumn(this.db, "decision_events", "rank_1m", "INTEGER");
+    ensureColumn(this.db, "decision_events", "rank_5m", "INTEGER");
+    ensureColumn(this.db, "decision_events", "rank_1m_seen_at", "INTEGER");
+    ensureColumn(this.db, "decision_events", "rank_5m_seen_at", "INTEGER");
+    ensureColumn(this.db, "decision_events", "created_at", "INTEGER");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS hot_pool_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        rule_version TEXT NOT NULL,
+        chain TEXT NOT NULL,
+        rank_1m_count INTEGER NOT NULL,
+        rank_5m_count INTEGER NOT NULL,
+        candidate_count INTEGER NOT NULL,
+        smartmoney_count INTEGER NOT NULL,
+        eligible_2_count INTEGER NOT NULL
       )
     `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ca_ts ON ticks (chain, ca, ts)`);
@@ -320,6 +378,9 @@ export class TickRecorder {
     );
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS decision_events_ca_ts ON decision_events (chain, ca, ts)`,
+    );
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS hot_pool_snapshots_rule_ts ON hot_pool_snapshots (rule_version, ts)`,
     );
     this.insert = this.db.prepare(`
       INSERT INTO ticks (
@@ -334,11 +395,13 @@ export class TickRecorder {
       INSERT INTO candidates (
         chain, ca, first_seen, last_seen, symbol, first_mc, max_mc, eligible,
         buy_usd, sell_usd, visiting, volume, pc_1m, liquidity, l0_json, pushed,
-        rule_version, has_usd, pc_5m
+        rule_version, has_usd, pc_5m, hot_pool_lane, momentum_tier, rank_1m, rank_5m,
+        rank_1m_seen_at, rank_5m_seen_at, created_at
       ) VALUES (
         @chain, @ca, @ts, @ts, @symbol, @mc, @mc, @eligible,
         @buy_usd, @sell_usd, @visiting, @volume, @pc_1m, @liquidity, @l0_json, @pushed,
-        @rule_version, @has_usd, @pc_5m
+        @rule_version, @has_usd, @pc_5m, @hot_pool_lane, @momentum_tier, @rank_1m, @rank_5m,
+        @rank_1m_seen_at, @rank_5m_seen_at, @created_at
       )
       ON CONFLICT(chain, ca) DO UPDATE SET
         last_seen = excluded.last_seen,
@@ -371,22 +434,42 @@ export class TickRecorder {
         END,
         rule_version = excluded.rule_version,
         has_usd = excluded.has_usd,
-        pc_5m = excluded.pc_5m
+        pc_5m = excluded.pc_5m,
+        hot_pool_lane = excluded.hot_pool_lane,
+        momentum_tier = excluded.momentum_tier,
+        rank_1m = excluded.rank_1m,
+        rank_5m = excluded.rank_5m,
+        rank_1m_seen_at = excluded.rank_1m_seen_at,
+        rank_5m_seen_at = excluded.rank_5m_seen_at,
+        created_at = excluded.created_at
     `);
     this.insertDecision = this.db.prepare(`
       INSERT INTO decision_events (
         ts, rule_version, chain, ca, stage, decision, reason, quota_skipped,
         eligible, eligible_strict, buy_wallets, sell_wallets, buy_usd, sell_usd, has_usd,
-        visiting, volume, swaps, buys, sells, pc_1m, pc_5m, mc, liquidity, l0_json, shadow_json
+        visiting, volume, swaps, buys, sells, pc_1m, pc_5m, mc, liquidity, l0_json, shadow_json,
+        hot_pool_lane, momentum_tier, rank_1m, rank_5m,
+        rank_1m_seen_at, rank_5m_seen_at, created_at
       ) VALUES (
         @ts, @rule_version, @chain, @ca, @stage, @decision, @reason, @quota_skipped,
         @eligible, @eligible_strict, @buy_wallets, @sell_wallets, @buy_usd, @sell_usd, @has_usd,
         @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @pc_5m, @mc, @liquidity,
-        @l0_json, @shadow_json
+        @l0_json, @shadow_json, @hot_pool_lane, @momentum_tier, @rank_1m, @rank_5m,
+        @rank_1m_seen_at, @rank_5m_seen_at, @created_at
+      )
+    `);
+    this.insertPoolSnapshot = this.db.prepare(`
+      INSERT INTO hot_pool_snapshots (
+        ts, rule_version, chain, rank_1m_count, rank_5m_count, candidate_count,
+        smartmoney_count, eligible_2_count
+      ) VALUES (
+        @ts, @rule_version, @chain, @rank_1m_count, @rank_5m_count, @candidate_count,
+        @smartmoney_count, @eligible_2_count
       )
     `);
     this.pruneStmt = this.db.prepare(`DELETE FROM ticks WHERE ts < ?`);
     this.pruneDecisionsStmt = this.db.prepare(`DELETE FROM decision_events WHERE ts < ?`);
+    this.prunePoolSnapshotsStmt = this.db.prepare(`DELETE FROM hot_pool_snapshots WHERE ts < ?`);
     this.logger.info({ retainHours: params.trace.retain_hours }, "ticks recorder ready");
   }
 
@@ -404,10 +487,15 @@ export class TickRecorder {
 
   note(entry: CacheEntry, now: number, pushed: boolean): void {
     if (!this.params.trace.enabled) return;
+    const key = watchKey(entry.chain, entry.ca);
+    if (!hotPoolLane(entry, this.params, now)) {
+      this.watches.delete(key);
+      this.cooled.delete(key);
+      return;
+    }
     const windowed = tradesInWindow(entry.trades, now, this.params.cache.evidence_ttl_sec);
     const hasVisiting = usableVisiting(entry, now, this.params.cache.evidence_ttl_sec) != null;
     const hasSmartmoney = windowed.length > 0;
-    const key = watchKey(entry.chain, entry.ca);
     if (this.cooled.has(key)) {
       if (hasVisiting || hasSmartmoney) return;
       this.cooled.delete(key);
@@ -473,6 +561,7 @@ export class TickRecorder {
     );
     const tape = usableTape1m(entry, now, this.params.cache.evidence_ttl_sec) ?? {};
     const l0 = usableL0(entry, now, this.params.cache.evidence_ttl_sec);
+    const lane = hotPoolLane(entry, this.params, now);
     try {
       this.insertDecision.run({
         ts: now,
@@ -496,17 +585,75 @@ export class TickRecorder {
         buys: tape.buys ?? null,
         sells: tape.sells ?? null,
         pc_1m: tape.price_change_1m ?? null,
-        pc_5m: usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null,
+        pc_5m: this.params.hot_pool.enabled
+          ? (hotPoolPrice5m(entry, this.params, now) ?? null)
+          : (usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null),
         mc: usableMarketCap(entry, now, this.params.cache.evidence_ttl_sec) ?? null,
         liquidity: usableLiquidity(entry, now, this.params.cache.evidence_ttl_sec) ?? null,
         l0_json: JSON.stringify(l0),
         shadow_json: JSON.stringify(shadowRiskSnapshot(l0)),
+        hot_pool_lane: lane ?? null,
+        momentum_tier:
+          tape.price_change_1m == null ? null : momentumTier(tape.price_change_1m, this.params),
+        rank_1m: isFreshRank1m(entry, this.params, now) ? (entry.rank_1m ?? null) : null,
+        rank_5m: isFreshRank5m(entry, this.params, now) ? (entry.rank_5m ?? null) : null,
+        rank_1m_seen_at: entry.rank_1m_seen_at ?? null,
+        rank_5m_seen_at: entry.rank_5m_seen_at ?? null,
+        created_at: entry.created_at ?? null,
       });
       this.decisionStates.set(stateKey, { fingerprint, ts: now });
     } catch (err) {
       this.logger.warn(
         { err: err instanceof Error ? err.message : "decision_insert_failed" },
         "decision event insert failed",
+      );
+    }
+  }
+
+  notePoolSnapshot(cache: TokenCache, chain: Chain, now: number): void {
+    if (!this.params.trace.enabled || !this.params.hot_pool.enabled) return;
+    let rank1 = 0;
+    let rank5 = 0;
+    let candidates = 0;
+    let smartmoney = 0;
+    let eligible2 = 0;
+    for (const entry of cache.entries(chain)) {
+      if (isFreshRank1m(entry, this.params, now)) rank1 += 1;
+      if (isFreshRank5m(entry, this.params, now)) rank5 += 1;
+      if (!hotPoolLane(entry, this.params, now)) continue;
+      candidates += 1;
+      const windowed = tradesInWindow(
+        entry.trades,
+        now,
+        this.params.cache.evidence_ttl_sec,
+      );
+      if (windowed.length > 0) smartmoney += 1;
+      if (
+        lastSides(
+          entry.trades,
+          now,
+          this.params.cache.evidence_ttl_sec,
+          this.params.flow.min_price_change_since_entry,
+        ).eligible >= this.params.flow.min_smart_wallets
+      ) {
+        eligible2 += 1;
+      }
+    }
+    try {
+      this.insertPoolSnapshot.run({
+        ts: now,
+        rule_version: this.params.rules.version,
+        chain,
+        rank_1m_count: rank1,
+        rank_5m_count: rank5,
+        candidate_count: candidates,
+        smartmoney_count: smartmoney,
+        eligible_2_count: eligible2,
+      });
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : "hot_pool_snapshot_failed", chain },
+        "hot pool snapshot insert failed",
       );
     }
   }
@@ -555,6 +702,7 @@ export class TickRecorder {
     try {
       this.pruneStmt.run(cutoff);
       this.pruneDecisionsStmt.run(cutoff);
+      this.prunePoolSnapshotsStmt.run(cutoff);
     } catch (err) {
       this.logger.warn(
         { err: err instanceof Error ? err.message : "ticks_prune_failed" },
@@ -608,7 +756,17 @@ export class TickRecorder {
       ).hasUsd
         ? 1
         : 0,
-      pc_5m: usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null,
+      pc_5m: this.params.hot_pool.enabled
+        ? (hotPoolPrice5m(entry, this.params, now) ?? null)
+        : (usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null),
+      hot_pool_lane: hotPoolLane(entry, this.params, now) ?? null,
+      momentum_tier:
+        snap.pc_1m == null ? null : momentumTier(snap.pc_1m, this.params),
+      rank_1m: isFreshRank1m(entry, this.params, now) ? (entry.rank_1m ?? null) : null,
+      rank_5m: isFreshRank5m(entry, this.params, now) ? (entry.rank_5m ?? null) : null,
+      rank_1m_seen_at: entry.rank_1m_seen_at ?? null,
+      rank_5m_seen_at: entry.rank_5m_seen_at ?? null,
+      created_at: entry.created_at ?? null,
     });
   }
 }

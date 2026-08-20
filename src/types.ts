@@ -42,6 +42,11 @@ export interface CacheEntry {
   market_cap_written_at?: number;
   liquidity?: number;
   liquidity_written_at?: number;
+  rank_1m?: number;
+  rank_1m_seen_at?: number;
+  rank_5m?: number;
+  rank_5m_seen_at?: number;
+  created_at?: number;
   signal10_at?: number;
   l0: Record<string, unknown>;
   /** L0 按字段记录更新时间，防止部分响应刷新整份旧快照。 */
@@ -49,6 +54,8 @@ export interface CacheEntry {
 }
 
 export type PassKind = "cluster" | "boost";
+export type HotPoolLane = "confirmed" | "new_token";
+export type MomentumTier = "normal" | "high" | "extreme";
 
 export interface SignalEvidence {
   smart_wallets: number;
@@ -69,6 +76,13 @@ export interface SignalEvidence {
   liquidity?: number;
   /** 净买判断是否使用了完整 USD 成交额；false 时退回钱包方向。 */
   has_usd?: boolean;
+  hot_pool_lane?: HotPoolLane;
+  momentum_tier?: MomentumTier;
+  rank_1m?: number;
+  rank_5m?: number;
+  rank_1m_seen_at?: number;
+  rank_5m_seen_at?: number;
+  created_at?: number;
 }
 
 export interface Signal {

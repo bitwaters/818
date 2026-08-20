@@ -36,6 +36,13 @@ export interface SignalRow {
   l0_json: string | null;
   rule_version: string;
   has_usd: number | null;
+  hot_pool_lane: string | null;
+  momentum_tier: string | null;
+  rank_1m: number | null;
+  rank_5m: number | null;
+  rank_1m_seen_at: number | null;
+  rank_5m_seen_at: number | null;
+  created_at: number | null;
   current_mc: number | null;
   min_mc: number | null;
   last_snapshot_at: number | null;
@@ -71,6 +78,13 @@ const REPLAY_COLUMNS: Array<[string, string]> = [
   ["l0_json", "TEXT"],
   ["rule_version", "TEXT NOT NULL DEFAULT 'legacy'"],
   ["has_usd", "INTEGER"],
+  ["hot_pool_lane", "TEXT"],
+  ["momentum_tier", "TEXT"],
+  ["rank_1m", "INTEGER"],
+  ["rank_5m", "INTEGER"],
+  ["rank_1m_seen_at", "INTEGER"],
+  ["rank_5m_seen_at", "INTEGER"],
+  ["created_at", "INTEGER"],
   ["current_mc", "REAL"],
   ["min_mc", "REAL"],
   ["last_snapshot_at", "INTEGER"],
@@ -169,12 +183,16 @@ export class StatsStore {
            chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc,
            pass_kind, eligible, eligible_strict, buy_wallets, sell_wallets,
            buy_usd, sell_usd, visiting, volume, swaps, buys, sells, pc_1m, pc_5m, liquidity,
-           l0_json, rule_version, has_usd, current_mc, min_mc, next_snapshot_at
+           l0_json, rule_version, has_usd, hot_pool_lane, momentum_tier, rank_1m, rank_5m,
+           rank_1m_seen_at, rank_5m_seen_at, created_at,
+           current_mc, min_mc, next_snapshot_at
          ) VALUES (
            @chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, NULL,
            @pass_kind, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
            @buy_usd, @sell_usd, @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @pc_5m,
-           @liquidity, @l0_json, @rule_version, @has_usd, @entry_mc, @entry_mc, @ts
+           @liquidity, @l0_json, @rule_version, @has_usd, @hot_pool_lane, @momentum_tier,
+           @rank_1m, @rank_5m, @rank_1m_seen_at, @rank_5m_seen_at, @created_at,
+           @entry_mc, @entry_mc, @ts
          )`,
       )
       .run({
@@ -203,6 +221,13 @@ export class StatsStore {
         // 兼容内部旧调用方/历史测试；生产 buildSignal 始终显式写入版本。
         rule_version: signal.rule_version || this.params.rules.version,
         has_usd: ev.has_usd == null ? null : ev.has_usd ? 1 : 0,
+        hot_pool_lane: ev.hot_pool_lane ?? null,
+        momentum_tier: ev.momentum_tier ?? null,
+        rank_1m: ev.rank_1m ?? null,
+        rank_5m: ev.rank_5m ?? null,
+        rank_1m_seen_at: ev.rank_1m_seen_at ?? null,
+        rank_5m_seen_at: ev.rank_5m_seen_at ?? null,
+        created_at: ev.created_at ?? null,
       });
     return true;
   }

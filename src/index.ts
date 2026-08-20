@@ -7,6 +7,7 @@ import { loadParams } from "./params.js";
 import { TelegramPusher } from "./push/telegram.js";
 import { PushedLedger } from "./pushed.js";
 import { QuotaTracker } from "./quota.js";
+import { resetAnalyticsOnce } from "./reset.js";
 import { fetchTokenSecurity } from "./sources/security.js";
 import { startHotSearches } from "./sources/hot-searches.js";
 import { startSignal } from "./sources/signal.js";
@@ -40,6 +41,7 @@ export function start(opts?: { paramsPath?: string }): {
   const store = params.stats.enabled ? new StatsStore(params, logger, sqlite) : null;
   const pushed = new PushedLedger(sqlite, dests);
   const trace = params.trace.enabled ? new TickRecorder(sqlite, params, logger) : null;
+  resetAnalyticsOnce(sqlite, params.rules.reset_id, params.rules.version, Date.now(), logger);
   const cache = new TokenCache((entry) => {
     trace?.note(entry, Date.now(), pushed.hasAll(entry.chain, entry.ca));
   });
@@ -74,6 +76,7 @@ export function start(opts?: { paramsPath?: string }): {
       });
     },
     recordDecision: (record) => trace?.noteDecision(record),
+    recordPoolSnapshot: (chain, ts) => trace?.notePoolSnapshot(cache, chain, ts),
     emit: (signal) => {
       for (const fn of listeners) {
         try {

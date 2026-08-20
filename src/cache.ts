@@ -158,6 +158,11 @@ export class TokenCache {
     return key ? this.map.has(key) : false;
   }
 
+  entries(chain?: Chain): CacheEntry[] {
+    const entries = [...this.map.values()];
+    return chain ? entries.filter((entry) => entry.chain === chain) : entries;
+  }
+
   delete(chain: Chain, rawCa: string): void {
     const key = cacheKey(chain, rawCa);
     if (key) this.map.delete(key);
@@ -222,6 +227,26 @@ export class TokenCache {
     return entry;
   }
 
+  /** 热门榜一行代表一份完整时点快照；缺字段不能用上一轮残值拼成“完整盘口”。 */
+  replaceTape1m(
+    chain: Chain,
+    rawCa: string,
+    tape: Partial<Tape1m>,
+    extras: { symbol?: string; liquidity?: number; now: number },
+  ): CacheEntry | null {
+    const entry = this.upsert(chain, rawCa);
+    if (!entry) return null;
+    entry.tape = { ...tape };
+    entry.tape_written_at = extras.now;
+    if (extras.symbol) entry.symbol = extras.symbol;
+    if (extras.liquidity != null) {
+      entry.liquidity = extras.liquidity;
+      entry.liquidity_written_at = extras.now;
+    }
+    this.emitMutate(entry);
+    return entry;
+  }
+
   writeTape5m(
     chain: Chain,
     rawCa: string,
@@ -243,6 +268,68 @@ export class TokenCache {
     entry.price_change_5m_written_at = now;
     this.emitMutate(entry);
     return entry;
+  }
+
+  writeCreatedAt(chain: Chain, rawCa: string, createdAt: number): CacheEntry | null {
+    const entry = this.upsert(chain, rawCa);
+    if (!entry) return null;
+    if (Number.isFinite(createdAt) && createdAt > 0) entry.created_at = createdAt;
+    return entry;
+  }
+
+  /** 成功且非空的榜单原子替换成员；失败/异常空榜由调用方跳过，交给 TTL 失效。 */
+  replaceRankMembership(
+    chain: Chain,
+    interval: "1m" | "5m",
+    rankedCas: string[],
+    now: number,
+  ): { present: Set<string>; changed: CacheEntry[] } {
+    const present = new Set<string>();
+    const positions = new Map<string, number>();
+    for (const rawCa of rankedCas) {
+      const entry = this.upsert(chain, rawCa);
+      if (!entry || present.has(entry.ca)) continue;
+      present.add(entry.ca);
+      positions.set(entry.ca, present.size);
+    }
+    if (present.size === 0) return { present, changed: [] };
+
+    const changed: CacheEntry[] = [];
+    this.batch(() => {
+      for (const entry of this.map.values()) {
+        if (entry.chain !== chain) continue;
+        const position = positions.get(entry.ca);
+        let didChange = false;
+        if (interval === "1m") {
+          const wasPresent = entry.rank_1m_seen_at != null;
+          const nextPresent = position != null;
+          if (nextPresent) {
+            entry.rank_1m = position;
+            entry.rank_1m_seen_at = now;
+          } else {
+            entry.rank_1m = undefined;
+            entry.rank_1m_seen_at = undefined;
+          }
+          didChange = wasPresent !== nextPresent || nextPresent;
+        } else {
+          const wasPresent = entry.rank_5m_seen_at != null;
+          const nextPresent = position != null;
+          if (nextPresent) {
+            entry.rank_5m = position;
+            entry.rank_5m_seen_at = now;
+          } else {
+            entry.rank_5m = undefined;
+            entry.rank_5m_seen_at = undefined;
+          }
+          didChange = wasPresent !== nextPresent || nextPresent;
+        }
+        if (didChange) {
+          changed.push(entry);
+          this.emitMutate(entry);
+        }
+      }
+    });
+    return { present, changed };
   }
 
   /** 本轮 5m 热门未出现的 token 清掉 5m 涨幅，避免过线一直用发臭的动量。 */

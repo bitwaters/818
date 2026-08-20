@@ -1,5 +1,6 @@
 rules:
-  version: "v3-bsc-guard"
+  version: "v4-hotpool-bsc-10k"
+  reset_id: "2026-08-20-hotpool-v4"
 
 chains:
   sol: true
@@ -13,6 +14,12 @@ poll:
 
 intervals:
   trending: ["1m", "5m"]
+
+hot_pool:
+  enabled: true
+  rank_limit: 100
+  membership_ttl_sec: 30
+  new_token_grace_sec: 360
 
 cache:
   evidence_ttl_sec: 180
@@ -35,7 +42,7 @@ pass:
     bsc: true
   min_entry_mc:
     sol: 10000   # SOL 微盘直接死；缺市值 skip 等 1m 热门
-    bsc: 30000   # 临时安全护栏：极低市值 BSC 样本回撤风险过高
+    bsc: 10000   # 热门池机制下从 $10k 起步，后续按新样本校准
   min_liquidity_usd:
     sol: 0
     bsc: 10000   # 缺流动性先等待，低于 $10k 否决
@@ -48,10 +55,12 @@ flow:
 tape:
   min_volume_usd: 5000
   min_swaps: 20
-  min_price_change_1m: 20
-  # 临时护栏：>=100% 视为末端追高；待 v3 样本充分后再校准。
-  max_price_change_1m: 100
-  # 必须有新鲜 5m 且 > 该值（0 即必须为正）。
+  min_price_change_1m: 0
+  # 热门新币涨幅可达数倍；不按单一涨幅硬砍，只记录动量分层。
+  max_price_change_1m: 0
+  high_momentum_1m: 100
+  extreme_momentum_1m: 300
+  # 有 5m 数据时必须为正；创建 6 分钟内的新币允许暂缺。
   min_price_change_5m: 0
   require_price_change_5m: true
   # 买/卖笔数比 ≥ 此值否决（薄盘对倒）；不把门槛从「买>卖」再拧紧

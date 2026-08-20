@@ -313,6 +313,52 @@ test("decision events keep rule version, exact rejection evidence, and shadow fi
   rec.stop();
 });
 
+test("hot-pool mode excludes non-ranked cache mutations and records pool coverage", () => {
+  const db = new Database(":memory:");
+  const params = recorderParams();
+  params.hot_pool.enabled = true;
+  params.hot_pool.membership_ttl_sec = 30;
+  const rec = new TickRecorder(db, params, pino({ level: "silent" }));
+  const cache = new TokenCache();
+  const now = 1_700_000_000_000;
+
+  rec.note(tokenAt(now), now, false);
+  rec.flush();
+  assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM candidates`).get() as { n: number }).n, 0);
+
+  const entry = tokenAt(now, {
+    rank_1m: 1,
+    rank_1m_seen_at: now,
+    rank_5m: 2,
+    rank_5m_seen_at: now,
+    price_change_5m: 5,
+    price_change_5m_written_at: now,
+  });
+  rec.note(entry, now, false);
+  rec.flush();
+  assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM candidates`).get() as { n: number }).n, 1);
+
+  const cached = cache.upsert("sol", SOL_CA)!;
+  Object.assign(cached, entry);
+  rec.notePoolSnapshot(cache, "sol", now);
+  const snapshot = db.prepare(`SELECT * FROM hot_pool_snapshots LIMIT 1`).get() as {
+    rank_1m_count: number;
+    rank_5m_count: number;
+    candidate_count: number;
+    smartmoney_count: number;
+  };
+  assert.deepEqual(
+    {
+      rank1: snapshot.rank_1m_count,
+      rank5: snapshot.rank_5m_count,
+      candidates: snapshot.candidate_count,
+      smartmoney: snapshot.smartmoney_count,
+    },
+    { rank1: 1, rank5: 1, candidates: 1, smartmoney: 1 },
+  );
+  rec.stop();
+});
+
 test("idle expire writes a final tick; cooled until off-list; mc move keeps the watch", () => {
   const t0 = 1_000;
 

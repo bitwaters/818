@@ -6,8 +6,9 @@ import {
   usableTape1m,
   usableVisiting,
 } from "./cache.js";
+import { hotPoolLane, hotPoolPrice5m, isFreshRank1m } from "./hotpool.js";
 import type { Params } from "./params.js";
-import type { CacheEntry, SmartTrade, Tape1m } from "./types.js";
+import type { CacheEntry, HotPoolLane, SmartTrade, Tape1m } from "./types.js";
 
 export interface LastSides {
   eligible: number;
@@ -89,8 +90,12 @@ export function tapeComplete(tape: Partial<Tape1m> | undefined): tape is Tape1m 
 }
 
 export function tapeOk(tape: Tape1m, params: Params["tape"]): boolean {
+  const priceOk =
+    params.min_price_change_1m === 0
+      ? tape.price_change_1m > 0
+      : tape.price_change_1m >= params.min_price_change_1m;
   return (
-    tape.price_change_1m >= params.min_price_change_1m &&
+    priceOk &&
     tape.buys > tape.sells &&
     tape.volume >= params.min_volume_usd &&
     tape.swaps >= params.min_swaps
@@ -131,15 +136,31 @@ export type PassResult =
       kind: "skip";
       reason:
         | "tape_incomplete"
+        | "hot_1m_incomplete"
         | "tape_5m_incomplete"
         | "entry_mc_incomplete"
         | "liquidity_incomplete";
     }
   | { kind: "drop"; reason: string }
-  | { kind: "pass"; cluster: boolean; boost: boolean; eligible: number };
+  | {
+      kind: "pass";
+      cluster: boolean;
+      boost: boolean;
+      eligible: number;
+      hot_pool_lane: HotPoolLane;
+    };
 
 export function evaluatePass(entry: CacheEntry, params: Params, now: number): PassResult {
   if (!params.pass.signal_enabled[entry.chain]) return { kind: "drop", reason: "chain_disabled" };
+  const lane = hotPoolLane(entry, params, now);
+  if (!lane) {
+    return {
+      kind: "skip",
+      reason: isFreshRank1m(entry, params, now)
+        ? "tape_5m_incomplete"
+        : "hot_1m_incomplete",
+    };
+  }
   const sides = lastSides(
     entry.trades,
     now,
@@ -148,7 +169,9 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   );
   const net = netBuyOk(sides, params.flow.require_net_buy);
   const vis = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
-  const pc5 = usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
+  const pc5 = params.hot_pool.enabled
+    ? hotPoolPrice5m(entry, params, now)
+    : usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
   const tape = usableTape1m(entry, now, params.cache.evidence_ttl_sec);
   if (!tapeComplete(tape)) return { kind: "skip", reason: "tape_incomplete" };
   if (!tapeOk(tape, params.tape)) return { kind: "drop", reason: "tape" };
@@ -161,7 +184,7 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   if (tapeFakeMomentum(tape, params.tape.max_buy_sell_ratio)) {
     return { kind: "drop", reason: "tape_fake" };
   }
-  if (params.tape.require_price_change_5m && pc5 == null) {
+  if (params.tape.require_price_change_5m && pc5 == null && lane !== "new_token") {
     return { kind: "skip", reason: "tape_5m_incomplete" };
   }
   if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
@@ -197,7 +220,15 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   }
 
   const cluster = sides.eligible >= params.flow.min_smart_wallets && net;
-  if (cluster) return { kind: "pass", cluster: true, boost: false, eligible: sides.eligible };
+  if (cluster) {
+    return {
+      kind: "pass",
+      cluster: true,
+      boost: false,
+      eligible: sides.eligible,
+      hot_pool_lane: lane,
+    };
+  }
   return { kind: "drop", reason: "pass_formula" };
 }
 

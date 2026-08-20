@@ -3,6 +3,7 @@ import type { Pipeline } from "../core.js";
 import type { Env } from "../env.js";
 import { gmgnRequest, shouldLogGmgnFail, unwrapList } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
+import { hotPoolLane } from "../hotpool.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
 import type { Chain, SmartTrade } from "../types.js";
@@ -48,7 +49,12 @@ export async function pollSmartmoney(opts: {
     });
     touched.add(ca);
   }
-  for (const ca of touched) await opts.pipeline.onWrite(opts.chain, ca);
+  for (const ca of touched) {
+    const entry = opts.cache.get(opts.chain, ca);
+    if (entry && hotPoolLane(entry, opts.params, now)) {
+      await opts.pipeline.onWrite(opts.chain, ca);
+    }
+  }
 }
 
 export function startSmartmoney(opts: {

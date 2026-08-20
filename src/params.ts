@@ -12,6 +12,7 @@ const ParamsSchema = z.object({
   rules: z
     .object({
       version: z.string().min(1),
+      reset_id: z.string().min(1).optional(),
     })
     .default({ version: "legacy" }),
   chains: chainBool,
@@ -24,6 +25,19 @@ const ParamsSchema = z.object({
   intervals: z.object({
     trending: z.array(z.string().min(1)).min(1),
   }),
+  hot_pool: z
+    .object({
+      enabled: z.boolean().default(false),
+      rank_limit: z.number().int().min(1).max(100).default(100),
+      membership_ttl_sec: z.number().int().positive().default(30),
+      new_token_grace_sec: z.number().int().nonnegative().default(360),
+    })
+    .default({
+      enabled: false,
+      rank_limit: 100,
+      membership_ttl_sec: 30,
+      new_token_grace_sec: 360,
+    }),
   cache: z.object({
     evidence_ttl_sec: z.number().int().positive(),
     push_cooldown_sec: z.number().int().nonnegative(),
@@ -64,6 +78,8 @@ const ParamsSchema = z.object({
     min_price_change_1m: z.number().nonnegative(),
     /** 达到该 1m 涨幅视为追高；0 关闭 */
     max_price_change_1m: z.number().nonnegative().default(0),
+    high_momentum_1m: z.number().nonnegative().default(100),
+    extreme_momentum_1m: z.number().nonnegative().default(300),
     min_price_change_5m: z.number().nonnegative(),
     /** true 时缺少新鲜 5m 动量只等待，不允许直接放行。 */
     require_price_change_5m: z.boolean().default(false),

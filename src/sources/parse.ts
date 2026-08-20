@@ -72,6 +72,12 @@ export function rankVisiting(row: Record<string, unknown>): number | undefined {
   return numField(row, "visiting_count", "v_c");
 }
 
+export function tokenCreatedAt(row: Record<string, unknown>): number | undefined {
+  const raw = numField(row, "creation_timestamp", "open_timestamp", "created_at");
+  if (raw == null || !(raw > 0)) return undefined;
+  return raw > 1e12 ? raw : raw * 1000;
+}
+
 export function parseTrade(row: Record<string, unknown>, now: number): SmartTrade | null {
   let wallet = strField(row, "maker", "wallet", "wallet_address", "from_address");
   if (!wallet && row.maker_info && typeof row.maker_info === "object") {

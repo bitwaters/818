@@ -1,5 +1,6 @@
 import { TokenCache, cacheKey, normalizeCa } from "./cache.js";
 import { checkL0 } from "./l0/index.js";
+import { hotPoolLane, isFreshRank1m } from "./hotpool.js";
 import type { Logger } from "./logger.js";
 import type { Params } from "./params.js";
 import { eligibleCount, evaluatePass } from "./pass.js";
@@ -30,6 +31,7 @@ export interface PipelineDeps {
   markPushedDest: (chain: Chain, ca: string, chatId: string) => void;
   ensureInserted: (signal: Signal) => void;
   recordDecision?: (record: DecisionRecord) => void;
+  recordPoolSnapshot?: (chain: Chain, ts: number) => void;
 }
 
 export class Pipeline {
@@ -60,6 +62,10 @@ export class Pipeline {
 
   async onWrite(chain: Chain, ca: string): Promise<EvaluateResult> {
     return this.evaluate(chain, ca);
+  }
+
+  recordPoolSnapshot(chain: Chain, ts = this.deps.now()): void {
+    this.deps.recordPoolSnapshot?.(chain, ts);
   }
 
   async onWindowEnd(): Promise<EvaluateResult[]> {
@@ -118,6 +124,15 @@ export class Pipeline {
     cache.pruneTrades(chain, rawCa, now, params.cache.evidence_ttl_sec);
     const entry = cache.get(chain, rawCa);
     if (!entry) return { decision: "skip", reason: "not_in_cache" };
+    // 中央门禁：任何来源都不能让非热门代币进入候选漏斗或 security 配额。
+    if (params.hot_pool.enabled && !hotPoolLane(entry, params, now)) {
+      return {
+        decision: "skip",
+        reason: isFreshRank1m(entry, params, now)
+          ? "tape_5m_incomplete"
+          : "hot_1m_incomplete",
+      };
+    }
     const done = (
       result: EvaluateResult,
       stage: DecisionRecord["stage"],
@@ -139,7 +154,6 @@ export class Pipeline {
 
     if (this.pending.has(key)) return done({ decision: "skip", reason: "pending" }, "cache", now);
     if (this.deps.hasPushedAll(chain, entry.ca)) {
-      this.deps.ensureInserted(buildSignal(entry, params, now, evaluatePass(entry, params, now)));
       return done({ decision: "skip", reason: "already_pushed" }, "cache", now);
     }
     const cool = this.cooldownUntil.get(key);
