@@ -34,6 +34,7 @@ describe("参数与发送开关", () => {
     assert.equal(params.strategy.bsc.tape.min_price_change_1m, 0);
     assert.equal(params.strategy.bsc.tape.max_price_change_1m, 0);
     assert.equal(params.strategy.bsc.pass.min_liquidity_usd, 10000);
+    assert.equal(params.l0_sol.bundler_rate_max, 0.5);
     assert.equal(params.l0_bsc.min_holder_count, 50);
     assert.equal(params.l0_bsc.bundler_rate_max, 0.5);
     assert.equal(params.l0_bsc.bot_degen_rate_max, 0.5);

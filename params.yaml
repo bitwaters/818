@@ -102,7 +102,7 @@ l0_sol:
   rug_ratio_max: 0.3
   drop_wash_trading: true
   rat_trader_rate_max: 0.3
-  bundler_rate_max: 0.3
+  bundler_rate_max: 0.5
   top10_holder_rate_max: 0.5
   drop_signal_10: true
 
