@@ -52,6 +52,33 @@ export function parseHotSearchGroups(
   return groups;
 }
 
+/** 只写入在场浏览；离榜不清，留给 TTL。空榜/无人数字段不得把低浏览否决抹成放行。 */
+export function ingestHotSearchGroup(opts: {
+  cache: TokenCache;
+  groupChain: Chain;
+  rows: unknown[];
+  now: number;
+  chainEnabled: (chain: Chain) => boolean;
+}): { present: Set<string>; touched: Array<{ chain: Chain; ca: string }> } {
+  const present = new Set<string>();
+  const touched: Array<{ chain: Chain; ca: string }> = [];
+  for (const item of opts.rows) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const ca = tokenAddress(row);
+    if (!ca) continue;
+    const chain = tokenChain(row, opts.groupChain);
+    if (!opts.chainEnabled(chain)) continue;
+    const visiting = numField(row, "visiting_count");
+    const entry =
+      visiting != null ? opts.cache.writeVisiting(chain, ca, visiting, opts.now) : opts.cache.upsert(chain, ca);
+    if (!entry) continue;
+    touched.push({ chain: entry.chain, ca: entry.ca });
+    if (chain === opts.groupChain) present.add(entry.ca);
+  }
+  return { present, touched };
+}
+
 export async function pollHotSearches(opts: {
   params: Params;
   env: Env;
@@ -81,22 +108,17 @@ export async function pollHotSearches(opts: {
   }
   const now = (opts.now ?? Date.now)();
   for (const { chain: groupChain, rows } of groups) {
-    const present = new Set<string>();
-    for (const item of rows) {
-      if (!item || typeof item !== "object") continue;
-      const row = item as Record<string, unknown>;
-      const ca = tokenAddress(row);
-      const visiting = numField(row, "visiting_count");
-      if (!ca || visiting == null) continue;
-      const chain = tokenChain(row, groupChain);
-      if (!opts.params.chains[chain]) continue;
-      const written = opts.cache.writeVisiting(chain, ca, visiting, now);
-      if (written && chain === groupChain) present.add(written.ca);
-      await opts.pipeline.onWrite(chain, ca);
+    const ingest = ingestHotSearchGroup({
+      cache: opts.cache,
+      groupChain,
+      rows,
+      now,
+      chainEnabled: (chain) => opts.params.chains[chain],
+    });
+    if (ingest.present.size === 0) {
+      opts.logger.warn({ chain: groupChain, rows: rows.length }, "hot-searches empty rank; skip clear");
     }
-    for (const entry of opts.cache.clearAbsentVisiting(groupChain, present)) {
-      await opts.pipeline.onWrite(entry.chain, entry.ca);
-    }
+    for (const { chain, ca } of ingest.touched) await opts.pipeline.onWrite(chain, ca);
   }
 }
 

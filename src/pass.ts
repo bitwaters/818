@@ -69,7 +69,7 @@ export function visitingOk(count: number | undefined, min: number): boolean {
 }
 
 export type PassResult =
-  | { kind: "skip"; reason: "tape_incomplete" | "visiting_incomplete" }
+  | { kind: "skip"; reason: "tape_incomplete" }
   | { kind: "drop"; reason: string }
   | { kind: "pass"; cluster: boolean; boost: boolean; eligible: number };
 
@@ -88,8 +88,7 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
     return { kind: "drop", reason: "tape_5m" };
   }
-  if (vis == null) return { kind: "skip", reason: "visiting_incomplete" };
-  if (!visitingOk(vis, params.attention.min_visiting_count)) {
+  if (vis != null && !visitingOk(vis, params.attention.min_visiting_count)) {
     return { kind: "drop", reason: "visiting" };
   }
 

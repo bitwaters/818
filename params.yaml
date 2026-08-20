@@ -40,6 +40,7 @@ tape:
   min_price_change_5m: 0
 
 attention:
+  # 热搜有新鲜浏览时必须 >= 该值；缺失/过期不挡。离榜不清浏览，留给 TTL。
   min_visiting_count: 100
   use_interval: "1m"
 
