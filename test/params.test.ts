@@ -33,7 +33,8 @@ describe("参数与发送开关", () => {
     assert.equal(params.tape.max_price_change_1m, 0);
     assert.equal(params.pass.min_liquidity_usd.bsc, 10000);
     assert.equal(params.l0_bsc.min_holder_count, 50);
-    assert.equal(params.l0_bsc.bot_degen_rate_max, 0.3);
+    assert.equal(params.l0_bsc.bundler_rate_max, 0.5);
+    assert.equal(params.l0_bsc.bot_degen_rate_max, 0.5);
     assert.equal(params.tape.max_buy_sell_ratio, 3);
     assert.equal(params.quota.on_429, "read_reset");
     assert.equal(params.stats.timezone, "Asia/Shanghai");

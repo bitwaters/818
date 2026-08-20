@@ -96,10 +96,10 @@ l0_bsc:
   rug_ratio_max: 0.3
   drop_wash_trading: true
   rat_trader_rate_max: 0.3
-  bundler_rate_max: 0.3
+  bundler_rate_max: 0.5
   top10_holder_rate_max: 0.5
   min_holder_count: 50
-  bot_degen_rate_max: 0.3
+  bot_degen_rate_max: 0.5
   drop_signal_10: true
 
 push:
