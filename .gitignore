@@ -6,8 +6,7 @@ data/*.sqlite-*
 *.log
 .DS_Store
 
-# 本地测试与开发文档不入库
-test/
+# 开发文档不入库；测试必须随生产代码版本化。
 docs/
 openspec/
 .cursor/

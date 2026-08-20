@@ -157,15 +157,18 @@ export class Pipeline {
       return { decision: "drop", reason: l0.reason };
     }
 
-    const pass = evaluatePass(cache.get(chain, entry.ca)!, params, now);
+    // security 可能排队或网络延迟；最终发送必须按当前时间重新剪枝和校验 TTL。
+    const finalNow = nowFn();
+    cache.pruneTrades(chain, entry.ca, finalNow, params.cache.evidence_ttl_sec);
+    const finalEntry = cache.get(chain, entry.ca)!;
+    const pass = evaluatePass(finalEntry, params, finalNow);
     if (pass.kind === "skip") return { decision: "skip", reason: pass.reason };
     if (pass.kind === "drop") {
       quota.removeSkipped(chain, entry.ca);
       return { decision: "drop", reason: pass.reason };
     }
 
-    const fresh = cache.get(chain, entry.ca)!;
-    const signal = buildSignal(fresh, params, now, pass);
+    const signal = buildSignal(finalEntry, params, finalNow, pass);
     if (!params.push.telegram_enabled) {
       return { decision: "skip", reason: "telegram_disabled", signal };
     }

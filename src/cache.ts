@@ -277,6 +277,7 @@ export class TokenCache {
     for (const [k, v] of Object.entries(fields)) {
       if (v !== undefined) entry.l0[k] = v;
     }
+    this.emitMutate(entry);
     return entry;
   }
 

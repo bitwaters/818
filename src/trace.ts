@@ -44,6 +44,23 @@ interface BufferedTick extends TickSnapshot {
   ca: string;
 }
 
+interface BufferedCandidate {
+  ts: number;
+  chain: Chain;
+  ca: string;
+  symbol: string | null;
+  mc: number | null;
+  eligible: number;
+  buy_usd: number;
+  sell_usd: number;
+  visiting: number | null;
+  volume: number | null;
+  pc_1m: number | null;
+  liquidity: number | null;
+  l0_json: string;
+  pushed: 0 | 1;
+}
+
 function watchKey(chain: Chain, ca: string): string {
   return `${chain}:${ca}`;
 }
@@ -159,7 +176,9 @@ export class TickRecorder {
   private readonly watches = new Map<string, WatchState>();
   private readonly cooled = new Set<string>();
   private buffer: BufferedTick[] = [];
+  private candidateBuffer: BufferedCandidate[] = [];
   private readonly insert;
+  private readonly upsertCandidate;
   private readonly pruneStmt;
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private pruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -195,6 +214,27 @@ export class TickRecorder {
     ensureTicksColumn(this.db, "sells", "INTEGER");
     ensureTicksColumn(this.db, "buy_usd", "REAL");
     ensureTicksColumn(this.db, "sell_usd", "REAL");
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS candidates (
+        chain TEXT NOT NULL,
+        ca TEXT NOT NULL,
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        symbol TEXT,
+        first_mc REAL,
+        max_mc REAL,
+        eligible INTEGER NOT NULL,
+        buy_usd REAL NOT NULL,
+        sell_usd REAL NOT NULL,
+        visiting INTEGER,
+        volume REAL,
+        pc_1m REAL,
+        liquidity REAL,
+        l0_json TEXT NOT NULL DEFAULT '{}',
+        pushed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (chain, ca)
+      )
+    `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ca_ts ON ticks (chain, ca, ts)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ts ON ticks (ts)`);
     this.insert = this.db.prepare(`
@@ -205,6 +245,36 @@ export class TickRecorder {
         @ts, @chain, @ca, @visiting, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
         @buy_usd, @sell_usd, @volume, @swaps, @buys, @sells, @pc_1m, @mc, @pushed
       )
+    `);
+    this.upsertCandidate = this.db.prepare(`
+      INSERT INTO candidates (
+        chain, ca, first_seen, last_seen, symbol, first_mc, max_mc, eligible,
+        buy_usd, sell_usd, visiting, volume, pc_1m, liquidity, l0_json, pushed
+      ) VALUES (
+        @chain, @ca, @ts, @ts, @symbol, @mc, @mc, @eligible,
+        @buy_usd, @sell_usd, @visiting, @volume, @pc_1m, @liquidity, @l0_json, @pushed
+      )
+      ON CONFLICT(chain, ca) DO UPDATE SET
+        last_seen = excluded.last_seen,
+        symbol = COALESCE(NULLIF(excluded.symbol, ''), candidates.symbol),
+        first_mc = COALESCE(candidates.first_mc, excluded.first_mc),
+        max_mc = CASE
+          WHEN excluded.max_mc IS NULL THEN candidates.max_mc
+          WHEN candidates.max_mc IS NULL OR excluded.max_mc > candidates.max_mc THEN excluded.max_mc
+          ELSE candidates.max_mc
+        END,
+        eligible = excluded.eligible,
+        buy_usd = excluded.buy_usd,
+        sell_usd = excluded.sell_usd,
+        visiting = excluded.visiting,
+        volume = excluded.volume,
+        pc_1m = excluded.pc_1m,
+        liquidity = excluded.liquidity,
+        l0_json = CASE
+          WHEN excluded.l0_json = '{}' THEN candidates.l0_json
+          ELSE excluded.l0_json
+        END,
+        pushed = MAX(candidates.pushed, excluded.pushed)
     `);
     this.pruneStmt = this.db.prepare(`DELETE FROM ticks WHERE ts < ?`);
     this.logger.info({ retainHours: params.trace.retain_hours }, "ticks recorder ready");
@@ -252,6 +322,8 @@ export class TickRecorder {
     }
 
     const snap = snapshotOf(entry, this.params, now, pushed);
+    // 候选研究数据不受 tick 采样间隔限制，确保 security/L0 更新和被拒绝状态不丢失。
+    this.enqueueCandidate(entry, snap, now);
     const interesting = isInterestingTick(watch, snap, this.params.trace.mc_change_pct);
     if (interesting) watch.lastIncreaseAt = now;
     if (shouldExpireWatch(watch, now, this.params.trace)) {
@@ -276,17 +348,28 @@ export class TickRecorder {
   }
 
   flush(): void {
-    if (this.buffer.length === 0) return;
+    if (this.buffer.length === 0 && this.candidateBuffer.length === 0) return;
     const rows = this.buffer;
+    const candidates = this.candidateBuffer;
     this.buffer = [];
-    const run = this.db.transaction((batch: BufferedTick[]) => {
-      for (const row of batch) this.insert.run(row);
+    this.candidateBuffer = [];
+    const run = this.db.transaction((batch: {
+      ticks: BufferedTick[];
+      candidates: BufferedCandidate[];
+    }) => {
+      for (const row of batch.ticks) this.insert.run(row);
+      for (const candidate of batch.candidates) this.upsertCandidate.run(candidate);
     });
     try {
-      run(rows);
+      run({ ticks: rows, candidates });
     } catch (err) {
       const merged = rows.concat(this.buffer);
       this.buffer = merged.length > MAX_BUFFER ? merged.slice(-MAX_BUFFER) : merged;
+      const mergedCandidates = candidates.concat(this.candidateBuffer);
+      this.candidateBuffer =
+        mergedCandidates.length > MAX_BUFFER
+          ? mergedCandidates.slice(-MAX_BUFFER)
+          : mergedCandidates;
       this.logger.warn(
         { err: err instanceof Error ? err.message : "ticks_flush_failed", n: rows.length },
         "ticks flush failed",
@@ -328,5 +411,24 @@ export class TickRecorder {
     watch.lastBuyUsd = snap.buy_usd;
     watch.lastSellUsd = snap.sell_usd;
     watch.lastMc = snap.mc;
+  }
+
+  private enqueueCandidate(entry: CacheEntry, snap: TickSnapshot, now: number): void {
+    this.candidateBuffer.push({
+      ts: now,
+      chain: entry.chain,
+      ca: entry.ca,
+      symbol: entry.symbol ?? null,
+      mc: snap.mc,
+      eligible: snap.eligible,
+      buy_usd: snap.buy_usd,
+      sell_usd: snap.sell_usd,
+      visiting: snap.visiting,
+      volume: snap.volume,
+      pc_1m: snap.pc_1m,
+      liquidity: entry.liquidity ?? null,
+      l0_json: JSON.stringify(entry.l0),
+      pushed: snap.pushed,
+    });
   }
 }

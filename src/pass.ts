@@ -10,6 +10,7 @@ export interface LastSides {
   sellWallets: number;
   buyUsd: number;
   sellUsd: number;
+  /** 窗口内每笔成交都有 USD 金额时为 true；部分缺失不得把未知金额当 0 */
   hasUsd: boolean;
 }
 
@@ -35,18 +36,29 @@ export function lastSides(
   let sellWallets = 0;
   let buyUsd = 0;
   let sellUsd = 0;
-  let hasUsd = false;
+  let hasUsd = windowed.length > 0;
+  // 方向看每个钱包最后一笔；净流必须累计窗口内全部去重成交，不能只取最后金额。
+  for (const trade of windowed) {
+    if (trade.amount_usd == null) {
+      hasUsd = false;
+      continue;
+    }
+    if (trade.side === "buy") buyUsd += trade.amount_usd;
+    else sellUsd += trade.amount_usd;
+  }
   for (const trade of last.values()) {
-    if (trade.amount_usd != null) hasUsd = true;
-    const usd = trade.amount_usd ?? 0;
     if (trade.side === "buy") {
       buyWallets += 1;
-      buyUsd += usd;
       if (!isClose(trade)) eligible += 1;
-      if (trade.price_change != null && trade.price_change >= minPriceChange) eligible_strict += 1;
+      if (
+        !isClose(trade) &&
+        trade.price_change != null &&
+        trade.price_change >= minPriceChange
+      ) {
+        eligible_strict += 1;
+      }
     } else {
       sellWallets += 1;
-      sellUsd += usd;
     }
   }
   return { eligible, eligible_strict, buyWallets, sellWallets, buyUsd, sellUsd, hasUsd };
@@ -94,7 +106,8 @@ export function tapeVolumeMarketCapOk(
 }
 
 export function tapeFakeMomentum(tape: Tape1m, maxRatio: number): boolean {
-  if (!(maxRatio > 0) || !(tape.sells > 0)) return false;
+  if (!(maxRatio > 0)) return false;
+  if (!(tape.sells > 0)) return tape.buys > 0;
   return tape.buys / tape.sells >= maxRatio;
 }
 
