@@ -13,10 +13,13 @@ describe("参数与发送开关", () => {
   it("2.1 从 params.yaml 加载并通过 Zod", () => {
     const params = loadParams();
     assert.equal(params.flow.min_smart_wallets, 2);
+    assert.equal(params.flow.require_smart_money, false);
     assert.equal(params.pass.visiting_can_boost, false);
     assert.equal(params.attention.min_visiting_count, 100);
-    assert.equal(params.rules.version, "v4-hotpool-bsc-10k");
-    assert.equal(params.rules.reset_id, "2026-08-20-hotpool-v4");
+    assert.equal(params.rules.version, "v5-hotpool-no-smartmoney-1h");
+    assert.equal(params.rules.reset_id, "2026-08-20-hotpool-v5");
+    assert.equal(params.rules.delivery_reset_id, "2026-08-20-clear-pushed-v5");
+    assert.equal(params.cache.push_cooldown_sec, 3600);
     assert.equal(params.hot_pool.enabled, true);
     assert.equal(params.hot_pool.rank_limit, 100);
     assert.equal(params.tape.require_price_change_5m, true);

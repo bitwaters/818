@@ -5,14 +5,13 @@ function rowKey(chain: Chain, ca: string, chatId: string): string {
   return `${chain}:${ca}:${chatId}`;
 }
 
-function anyKey(chain: Chain, ca: string): string {
-  return `${chain}:${ca}`;
+function isRecent(ts: number | undefined, now: number, cooldownSec: number): boolean {
+  return ts != null && ts > now - cooldownSec * 1000;
 }
 
-/** 按目的地终身去重：同一 chain+CA 只对尚未成功的 chat 补发。 */
+/** 按目的地保存最近成功时间；冷却结束后允许同一 chain+CA 再次发送。 */
 export class PushedLedger {
-  private readonly seen = new Set<string>();
-  private readonly any = new Set<string>();
+  private readonly latest = new Map<string, number>();
 
   constructor(
     private readonly db: Database.Database,
@@ -28,43 +27,53 @@ export class PushedLedger {
       )
     `);
     this.migrateLegacy();
-    this.seedFromSignals();
-    for (const row of this.db.prepare(`SELECT chain, ca, chat_id FROM pushed`).all() as Array<{
+    for (const row of this.db.prepare(`SELECT chain, ca, chat_id, ts FROM pushed`).all() as Array<{
       chain: Chain;
       ca: string;
       chat_id: string;
+      ts: number;
     }>) {
-      this.remember(row.chain, row.ca, row.chat_id);
+      this.remember(row.chain, row.ca, row.chat_id, row.ts);
     }
   }
 
-  hasAll(chain: Chain, ca: string): boolean {
-    if (this.destIds.length === 0) return this.any.has(anyKey(chain, ca));
-    return this.destIds.every((id) => this.seen.has(rowKey(chain, ca, id)));
+  hasAll(chain: Chain, ca: string, now: number, cooldownSec: number): boolean {
+    if (this.destIds.length === 0) return false;
+    return this.destIds.every((id) =>
+      isRecent(this.latest.get(rowKey(chain, ca, id)), now, cooldownSec),
+    );
   }
 
-  hasAny(chain: Chain, ca: string): boolean {
-    return this.any.has(anyKey(chain, ca));
+  hasAny(chain: Chain, ca: string, now: number, cooldownSec: number): boolean {
+    return this.destIds.some((id) =>
+      isRecent(this.latest.get(rowKey(chain, ca, id)), now, cooldownSec),
+    );
   }
 
-  pendingDests(chain: Chain, ca: string): string[] {
-    return this.destIds.filter((id) => !this.seen.has(rowKey(chain, ca, id)));
+  pendingDests(chain: Chain, ca: string, now: number, cooldownSec: number): string[] {
+    return this.destIds.filter(
+      (id) => !isRecent(this.latest.get(rowKey(chain, ca, id)), now, cooldownSec),
+    );
   }
 
   markDest(chain: Chain, ca: string, chatId: string, ts: number): void {
     const k = rowKey(chain, ca, chatId);
-    if (this.seen.has(k)) return;
-    this.remember(chain, ca, chatId);
+    const previous = this.latest.get(k);
+    if (previous != null && previous >= ts) return;
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO pushed (chain, ca, chat_id, ts) VALUES (@chain, @ca, @chat_id, @ts)`,
+        `INSERT INTO pushed (chain, ca, chat_id, ts)
+         VALUES (@chain, @ca, @chat_id, @ts)
+         ON CONFLICT(chain, ca, chat_id) DO UPDATE SET ts = excluded.ts
+         WHERE excluded.ts > pushed.ts`,
       )
       .run({ chain, ca, chat_id: chatId, ts });
+    // 先落盘再更新内存；SQLite 失败时不能误进入一小时冷却。
+    this.remember(chain, ca, chatId, ts);
   }
 
-  private remember(chain: Chain, ca: string, chatId: string): void {
-    this.seen.add(rowKey(chain, ca, chatId));
-    this.any.add(anyKey(chain, ca));
+  private remember(chain: Chain, ca: string, chatId: string, ts: number): void {
+    this.latest.set(rowKey(chain, ca, chatId), ts);
   }
 
   private migrateLegacy(): void {
@@ -92,18 +101,4 @@ export class PushedLedger {
     expand();
   }
 
-  private seedFromSignals(): void {
-    const exists = this.db
-      .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'signals'`)
-      .get() as { ok: number } | undefined;
-    if (!exists || this.destIds.length === 0) return;
-    const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO pushed (chain, ca, chat_id, ts)
-      SELECT chain, ca, ?, MIN(ts) FROM signals GROUP BY chain, ca
-    `);
-    const seed = this.db.transaction(() => {
-      for (const dest of this.destIds) insert.run(dest);
-    });
-    seed();
-  }
 }

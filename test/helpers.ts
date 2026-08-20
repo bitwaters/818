@@ -30,6 +30,7 @@ export function testParams(mut?: (p: Params) => void): Params {
   // 大多数金样例只验证原有单一规则；新增生产过滤由专项用例覆盖。
   params.pass.signal_enabled = { sol: true, bsc: true };
   params.hot_pool.enabled = false;
+  params.flow.require_smart_money = true;
   params.tape.min_price_change_1m = 20;
   params.tape.max_price_change_1m = 0;
   params.tape.require_price_change_5m = false;
@@ -150,8 +151,12 @@ export function makeHarness(opts?: {
   const logger = pino({ level: "silent" });
   const clock = { now };
   const dests = telegram.destinations();
-  const pushed = new Set<string>();
+  const pushed = new Map<string, number>();
   const destKey = (chain: Chain, ca: string, chatId: string) => `${chain}:${ca}:${chatId}`;
+  const recent = (chain: Chain, ca: string, chatId: string, at: number) => {
+    const ts = pushed.get(destKey(chain, ca, chatId));
+    return ts != null && ts > at - params.cache.push_cooldown_sec * 1000;
+  };
   const insertSignal = (s: Signal) => {
     try {
       const entry = cache.get(s.chain, s.ca);
@@ -177,11 +182,11 @@ export function makeHarness(opts?: {
       return null;
     },
     telegram,
-    hasPushedAll: (chain, ca) => dests.every((id) => pushed.has(destKey(chain, ca, id))),
-    hasAnyPushed: (chain, ca) => dests.some((id) => pushed.has(destKey(chain, ca, id))),
-    pendingDests: (chain, ca) => dests.filter((id) => !pushed.has(destKey(chain, ca, id))),
+    hasPushedAll: (chain, ca, at) => dests.every((id) => recent(chain, ca, id, at)),
+    hasAnyPushed: (chain, ca, at) => dests.some((id) => recent(chain, ca, id, at)),
+    pendingDests: (chain, ca, at) => dests.filter((id) => !recent(chain, ca, id, at)),
     markPushedDest: (chain, ca, chatId) => {
-      pushed.add(destKey(chain, ca, chatId));
+      pushed.set(destKey(chain, ca, chatId), clock.now);
     },
     ensureInserted: insertSignal,
     recordDecision: (record) => decisions.push(record),

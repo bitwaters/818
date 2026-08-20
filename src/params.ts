@@ -13,6 +13,7 @@ const ParamsSchema = z.object({
     .object({
       version: z.string().min(1),
       reset_id: z.string().min(1).optional(),
+      delivery_reset_id: z.string().min(1).optional(),
     })
     .default({ version: "legacy" }),
   chains: chainBool,
@@ -68,6 +69,7 @@ const ParamsSchema = z.object({
       .default({ sol: 0, bsc: 0 }),
   }),
   flow: z.object({
+    require_smart_money: z.boolean().default(true),
     min_smart_wallets: z.number().int().min(1),
     require_net_buy: z.boolean(),
     min_price_change_since_entry: z.number(),

@@ -13,7 +13,9 @@ import type { CacheEntry, PassKind, Signal } from "./types.js";
 
 export function passKindOf(pass: PassResult): PassKind | undefined {
   if (pass.kind !== "pass") return undefined;
-  return pass.cluster ? "cluster" : "boost";
+  if (pass.cluster) return "cluster";
+  if (pass.boost) return "boost";
+  return "hot";
 }
 
 export function gmgnUrl(params: Params, chain: CacheEntry["chain"], ca: string): string {

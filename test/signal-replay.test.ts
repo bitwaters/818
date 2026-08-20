@@ -37,6 +37,7 @@ test("buildSignal reuses passed PassResult and does not zero missing tape", () =
     cluster: true,
     boost: false,
     eligible: 2,
+    hot_pool_lane: "confirmed",
   });
   assert.equal(signal.evidence.pass_kind, "cluster");
   assert.equal(signal.evidence.volume, undefined);
@@ -44,4 +45,14 @@ test("buildSignal reuses passed PassResult and does not zero missing tape", () =
   assert.equal(signal.evidence.price_change_1m, undefined);
   assert.equal(signal.evidence.buys, undefined);
   assert.equal(passKindOf({ kind: "drop", reason: "tape" }), undefined);
+  assert.equal(
+    passKindOf({
+      kind: "pass",
+      cluster: false,
+      boost: false,
+      eligible: 0,
+      hot_pool_lane: "confirmed",
+    }),
+    "hot",
+  );
 });

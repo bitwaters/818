@@ -215,15 +215,20 @@ describe("金样例 12–15、21、22 Telegram", () => {
     assert.equal(h.emitted.length, 0);
   });
 
-  it("14 已向全部目的地推过 → 跳过", async () => {
+  it("14 一小时冷却内已向全部目的地推过 → 跳过", async () => {
     const h = makeHarness();
     seedReady(h);
     assert.equal((await evalOf(h)).decision, "push");
     h.inserted.length = 0;
     const r = await evalOf(h);
     assert.equal(r.decision, "skip");
-    assert.equal(r.reason, "already_pushed");
+    assert.equal(r.reason, "cooldown");
     assert.equal(h.inserted.length, 0);
+
+    h.now += 3_600_000;
+    seedReady(h);
+    assert.equal((await evalOf(h)).decision, "push");
+    assert.equal(h.telegram.signals.length, 2);
   });
 
   it("15 已 pending → 跳过", async () => {

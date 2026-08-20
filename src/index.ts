@@ -7,7 +7,7 @@ import { loadParams } from "./params.js";
 import { TelegramPusher } from "./push/telegram.js";
 import { PushedLedger } from "./pushed.js";
 import { QuotaTracker } from "./quota.js";
-import { resetAnalyticsOnce } from "./reset.js";
+import { resetAnalyticsOnce, resetDeliveryOnce } from "./reset.js";
 import { fetchTokenSecurity } from "./sources/security.js";
 import { startHotSearches } from "./sources/hot-searches.js";
 import { startSignal } from "./sources/signal.js";
@@ -39,11 +39,23 @@ export function start(opts?: { paramsPath?: string }): {
   );
   const sqlite = openSqlite(params.stats.sqlite_path);
   const store = params.stats.enabled ? new StatsStore(params, logger, sqlite) : null;
-  const pushed = new PushedLedger(sqlite, dests);
   const trace = params.trace.enabled ? new TickRecorder(sqlite, params, logger) : null;
   resetAnalyticsOnce(sqlite, params.rules.reset_id, params.rules.version, Date.now(), logger);
+  resetDeliveryOnce(
+    sqlite,
+    params.rules.delivery_reset_id,
+    params.rules.version,
+    Date.now(),
+    logger,
+  );
+  const pushed = new PushedLedger(sqlite, dests);
   const cache = new TokenCache((entry) => {
-    trace?.note(entry, Date.now(), pushed.hasAll(entry.chain, entry.ca));
+    const now = Date.now();
+    trace?.note(
+      entry,
+      now,
+      pushed.hasAll(entry.chain, entry.ca, now, params.cache.push_cooldown_sec),
+    );
   });
   const listeners: Array<(signal: Signal) => void> = [];
 
@@ -59,9 +71,12 @@ export function start(opts?: { paramsPath?: string }): {
     now: Date.now,
     fetchSecurity: (chain, ca) => fetchTokenSecurity(env, chain, ca),
     telegram,
-    hasPushedAll: (chain, ca) => pushed.hasAll(chain, ca),
-    hasAnyPushed: (chain, ca) => pushed.hasAny(chain, ca),
-    pendingDests: (chain, ca) => pushed.pendingDests(chain, ca),
+    hasPushedAll: (chain, ca, now) =>
+      pushed.hasAll(chain, ca, now, params.cache.push_cooldown_sec),
+    hasAnyPushed: (chain, ca, now) =>
+      pushed.hasAny(chain, ca, now, params.cache.push_cooldown_sec),
+    pendingDests: (chain, ca, now) =>
+      pushed.pendingDests(chain, ca, now, params.cache.push_cooldown_sec),
     markPushedDest: (chain, ca, chatId) => pushed.markDest(chain, ca, chatId, Date.now()),
     ensureInserted: (signal) => {
       if (!store) return;

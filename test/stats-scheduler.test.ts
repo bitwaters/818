@@ -90,6 +90,23 @@ test("observations store drawdown, hits, and time-bucket market caps", () => {
   db.close();
 });
 
+test("repeat delivery keeps the first signal timestamp and entry market cap", () => {
+  const db = new Database(":memory:");
+  const params = testParams((p) => {
+    p.rules.version = "repeat-v1";
+  });
+  const store = new StatsStore(params, pino({ level: "silent" }), db);
+  const ca = "0x4444444444444444444444444444444444444444";
+  assert.equal(store.insert(signal(params.rules.version, ca, 1_000, 10_000)), true);
+  assert.equal(store.insert(signal(params.rules.version, ca, 3_601_000, 30_000)), false);
+  const row = db.prepare(`SELECT ts, entry_mc FROM signals WHERE ca = ?`).get(ca) as {
+    ts: number;
+    entry_mc: number;
+  };
+  assert.deepEqual(row, { ts: 1_000, entry_mc: 10_000 });
+  db.close();
+});
+
 test("legacy signals schema upgrades without destructive migration", () => {
   const db = new Database(":memory:");
   db.exec(`

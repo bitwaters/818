@@ -53,7 +53,7 @@ export interface CacheEntry {
   l0_written_at?: Record<string, number>;
 }
 
-export type PassKind = "cluster" | "boost";
+export type PassKind = "cluster" | "boost" | "hot";
 export type HotPoolLane = "confirmed" | "new_token";
 export type MomentumTier = "normal" | "high" | "extreme";
 

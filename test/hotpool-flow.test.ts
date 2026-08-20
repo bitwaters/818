@@ -136,6 +136,42 @@ test("a verified young 1m-ranked token may pass while 5m data is not formed", ()
   assert.deepEqual(tooOld, { kind: "skip", reason: "tape_5m_incomplete" });
 });
 
+test("hot-pool mode can pass without smart-money trades when confirmation is disabled", async () => {
+  const p = params();
+  p.flow.require_smart_money = false;
+  const entry = ready({
+    trades: [],
+    rank_1m: 1,
+    rank_1m_seen_at: now,
+    rank_5m: 1,
+    rank_5m_seen_at: now,
+    price_change_5m: 8,
+    price_change_5m_written_at: now,
+  });
+  const pass = evaluatePass(entry, p, now);
+  assert.equal(pass.kind, "pass");
+  assert.equal(pass.kind === "pass" ? pass.cluster : true, false);
+  assert.equal(buildSignal(entry, p, now, pass).evidence.pass_kind, "hot");
+
+  let h!: Harness;
+  h = makeHarness({
+    params: p,
+    now,
+    fetchSecurity: async () => ({ ...L0_SOL }),
+  });
+  seed(h, "sol", SOL_CA, {
+    tape: GOOD_TAPE,
+    trades: [],
+    visiting: 150,
+    marketCap: 100_000,
+    priceChange5m: 8,
+  });
+  h.cache.replaceRankMembership("sol", "1m", [SOL_CA], now);
+  h.cache.replaceRankMembership("sol", "5m", [SOL_CA], now);
+  assert.equal((await evalOf(h)).decision, "push");
+  assert.equal(h.securityCalls.length, 1);
+});
+
 test("extreme 1m momentum is tagged rather than rejected", () => {
   const p = params();
   const entry = ready({

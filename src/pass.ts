@@ -219,11 +219,11 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     }
   }
 
-  const cluster = sides.eligible >= params.flow.min_smart_wallets && net;
-  if (cluster) {
+  const smartMoneyConfirmed = sides.eligible >= params.flow.min_smart_wallets && net;
+  if (!params.flow.require_smart_money || smartMoneyConfirmed) {
     return {
       kind: "pass",
-      cluster: true,
+      cluster: smartMoneyConfirmed,
       boost: false,
       eligible: sides.eligible,
       hot_pool_lane: lane,

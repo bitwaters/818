@@ -1,6 +1,7 @@
 rules:
-  version: "v4-hotpool-bsc-10k"
-  reset_id: "2026-08-20-hotpool-v4"
+  version: "v5-hotpool-no-smartmoney-1h"
+  reset_id: "2026-08-20-hotpool-v5"
+  delivery_reset_id: "2026-08-20-clear-pushed-v5"
 
 chains:
   sol: true
@@ -23,7 +24,7 @@ hot_pool:
 
 cache:
   evidence_ttl_sec: 180
-  push_cooldown_sec: 300
+  push_cooldown_sec: 3600
 
 sources:
   smartmoney: true
@@ -48,6 +49,7 @@ pass:
     bsc: 10000   # 缺流动性先等待，低于 $10k 否决
 
 flow:
+  require_smart_money: false
   min_smart_wallets: 2
   require_net_buy: true
   min_price_change_since_entry: 1.0

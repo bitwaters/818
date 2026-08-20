@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
-import { resetAnalyticsOnce } from "../src/reset.ts";
+import { resetAnalyticsOnce, resetDeliveryOnce } from "../src/reset.ts";
 
 test("analytics reset is transactional, idempotent, and preserves pushed ledger", () => {
   const db = new Database(":memory:");
@@ -39,5 +39,26 @@ test("analytics reset is transactional, idempotent, and preserves pushed ledger"
   const second = resetAnalyticsOnce(db, "reset-v4", "v4", 456);
   assert.deepEqual(second, { applied: false, deleted: {} });
   assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM signals`).get() as { n: number }).n, 1);
+  db.close();
+});
+
+test("delivery reset clears historical pushed rows once without touching first-signal stats", () => {
+  const db = new Database(":memory:");
+  db.exec(`CREATE TABLE pushed (id INTEGER); INSERT INTO pushed VALUES (1);`);
+  db.exec(`CREATE TABLE signals (id INTEGER); INSERT INTO signals VALUES (1);`);
+
+  assert.deepEqual(resetDeliveryOnce(db, "delivery-v5", "v5", 123), {
+    applied: true,
+    deleted: { pushed: 1 },
+  });
+  assert.equal((db.prepare(`SELECT COUNT(*) n FROM pushed`).get() as { n: number }).n, 0);
+  assert.equal((db.prepare(`SELECT COUNT(*) n FROM signals`).get() as { n: number }).n, 1);
+
+  db.exec(`INSERT INTO pushed VALUES (2)`);
+  assert.deepEqual(resetDeliveryOnce(db, "delivery-v5", "v5", 456), {
+    applied: false,
+    deleted: {},
+  });
+  assert.equal((db.prepare(`SELECT COUNT(*) n FROM pushed`).get() as { n: number }).n, 1);
   db.close();
 });

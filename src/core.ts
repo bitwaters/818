@@ -25,9 +25,9 @@ export interface PipelineDeps {
   fetchSecurity: (chain: Chain, ca: string) => Promise<Record<string, unknown> | null>;
   telegram: TelegramSender;
   emit: (signal: Signal) => void;
-  hasPushedAll: (chain: Chain, ca: string) => boolean;
-  hasAnyPushed: (chain: Chain, ca: string) => boolean;
-  pendingDests: (chain: Chain, ca: string) => string[];
+  hasPushedAll: (chain: Chain, ca: string, now: number) => boolean;
+  hasAnyPushed: (chain: Chain, ca: string, now: number) => boolean;
+  pendingDests: (chain: Chain, ca: string, now: number) => string[];
   markPushedDest: (chain: Chain, ca: string, chatId: string) => void;
   ensureInserted: (signal: Signal) => void;
   recordDecision?: (record: DecisionRecord) => void;
@@ -50,7 +50,7 @@ export class Pipeline {
     const key = cacheKey(chain, ca);
     if (!key) return false;
     const normalized = normalizeCa(chain, ca);
-    if (normalized && this.deps.hasPushedAll(chain, normalized)) return true;
+    if (normalized && this.deps.hasPushedAll(chain, normalized, now)) return true;
     const until = this.cooldownUntil.get(key);
     return until != null && now < until;
   }
@@ -153,8 +153,8 @@ export class Pipeline {
     };
 
     if (this.pending.has(key)) return done({ decision: "skip", reason: "pending" }, "cache", now);
-    if (this.deps.hasPushedAll(chain, entry.ca)) {
-      return done({ decision: "skip", reason: "already_pushed" }, "cache", now);
+    if (this.deps.hasPushedAll(chain, entry.ca, now)) {
+      return done({ decision: "skip", reason: "cooldown" }, "cache", now);
     }
     const cool = this.cooldownUntil.get(key);
     if (cool != null && now < cool) {
@@ -175,7 +175,7 @@ export class Pipeline {
     const l0 = checkL0(entry, params, now);
     if (l0.kind === "incomplete") {
       const eligible = eligibleCount(entry, params, now);
-      if (eligible === 0) {
+      if (params.flow.require_smart_money && eligible === 0) {
         return done({ decision: "skip", reason: "l0_incomplete_no_eligible" }, "security", now);
       }
       if (!quota.canSecurity(chain, now)) {
@@ -223,13 +223,12 @@ export class Pipeline {
       return done({ decision: "skip", reason: "telegram_disabled", signal }, "delivery", finalNow);
     }
 
-    const pending = this.deps.pendingDests(chain, entry.ca);
+    const pending = this.deps.pendingDests(chain, entry.ca, finalNow);
     if (pending.length === 0) {
-      this.deps.ensureInserted(signal);
-      return done({ decision: "skip", reason: "already_pushed", signal }, "delivery", finalNow);
+      return done({ decision: "skip", reason: "cooldown", signal }, "delivery", finalNow);
     }
 
-    const firstDelivery = !this.deps.hasAnyPushed(chain, entry.ca);
+    const firstDelivery = !this.deps.hasAnyPushed(chain, entry.ca, finalNow);
     this.pending.add(key);
     let sent: { okIds: string[]; fail: number };
     try {
@@ -253,11 +252,13 @@ export class Pipeline {
     }
 
     this.deps.ensureInserted(signal);
+    if (this.deps.hasPushedAll(chain, entry.ca, nowFn())) {
+      this.cooldownUntil.set(key, nowFn() + params.cache.push_cooldown_sec * 1000);
+    }
     if (!firstDelivery) {
       return done({ decision: "skip", reason: "dest_retry", signal }, "delivery", finalNow);
     }
 
-    this.cooldownUntil.set(key, nowFn() + params.cache.push_cooldown_sec * 1000);
     quota.removeSkipped(chain, entry.ca);
     return done({ decision: "push", reason: "pass", signal }, "delivery", finalNow);
   }
