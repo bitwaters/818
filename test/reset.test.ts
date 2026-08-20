@@ -11,6 +11,7 @@ test("analytics reset is transactional, idempotent, and preserves pushed ledger"
     "candidates",
     "decision_events",
     "hot_pool_snapshots",
+    "shadow_signals",
   ]) {
     db.exec(`CREATE TABLE ${table} (id INTEGER)`);
     db.exec(`INSERT INTO ${table} (id) VALUES (1)`);
@@ -26,6 +27,7 @@ test("analytics reset is transactional, idempotent, and preserves pushed ledger"
     candidates: 1,
     decision_events: 1,
     hot_pool_snapshots: 1,
+    shadow_signals: 1,
   });
   for (const table of Object.keys(first.deleted)) {
     assert.equal(

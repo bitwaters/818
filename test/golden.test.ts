@@ -160,7 +160,7 @@ describe("金样例 1–11 L0/过线", () => {
     assert.equal(r.reason, "pass_formula");
   });
 
-  it("10 浏览缺失不挡，不足则丢", async () => {
+  it("10 浏览缺失等待，不足则丢", async () => {
     const h = makeHarness();
     seed(h, "sol", SOL_CA, {
       l0: L0_SOL,
@@ -170,7 +170,8 @@ describe("金样例 1–11 L0/过线", () => {
       marketCap: 100_000,
     });
     const missing = await evalOf(h);
-    assert.equal(missing.decision, "push");
+    assert.equal(missing.decision, "skip");
+    assert.equal(missing.reason, "visiting_incomplete");
     const h2 = makeHarness();
     seed(h2, "sol", SOL_CA, {
       l0: L0_SOL,
@@ -296,7 +297,12 @@ describe("金样例 12–15、21、22 Telegram", () => {
 describe("金样例 16–20 缓存与过线边沿", () => {
   it("16 L0 缺键 eligible≥1 security 未返回 → 跳过", async () => {
     const h = makeHarness({ fetchSecurity: async () => null });
-    seed(h, "sol", SOL_CA, { trades: twoBuys(h.now), tape: GOOD_TAPE, marketCap: 100_000 });
+    seed(h, "sol", SOL_CA, {
+      trades: twoBuys(h.now),
+      tape: GOOD_TAPE,
+      visiting: 150,
+      marketCap: 100_000,
+    });
     const r = await evalOf(h);
     assert.equal(r.decision, "skip");
     assert.equal(r.reason, "security_failed");
@@ -340,7 +346,11 @@ describe("金样例 16–20 缓存与过线边沿", () => {
   });
 
   it("19 min_smart_wallets=3 eligible=2 浏览达标不再 boost → 丢", async () => {
-    const h = makeHarness({ params: testParams((p) => { p.flow.min_smart_wallets = 3; }) });
+    const h = makeHarness({
+      params: testParams((p) => {
+        p.strategy.sol.flow.min_smart_wallets = 3;
+      }),
+    });
     seed(h, "sol", SOL_CA, {
       l0: L0_SOL,
       tape: GOOD_TAPE,
@@ -608,6 +618,7 @@ describe("金样例 28–29、33–37", () => {
     const incomplete = {
       trades: twoBuys(1_700_000_000_000),
       tape: GOOD_TAPE,
+      visiting: 150,
       marketCap: 100_000,
     };
     const h = makeHarness({ fetchSecurity: async () => null });
@@ -627,7 +638,12 @@ describe("金样例 28–29、33–37", () => {
 
     const bscL0 = { ...L0_BSC };
     delete bscL0.is_honeypot;
-    seed(h, "bsc", BSC_CA, { l0: bscL0, trades: twoBuys(h.now), tape: GOOD_TAPE });
+    seed(h, "bsc", BSC_CA, {
+      l0: bscL0,
+      trades: twoBuys(h.now),
+      tape: GOOD_TAPE,
+      visiting: 150,
+    });
     const beforeBsc = h.securityCalls.length;
     await evalOf(h, "bsc", BSC_CA);
     assert.equal(h.securityCalls.length, beforeBsc + 1);

@@ -25,12 +25,14 @@ const now = 1_700_000_000_000;
 
 function params() {
   return testParams((p) => {
-    p.hot_pool.enabled = true;
     p.hot_pool.rank_limit = 100;
-    p.hot_pool.membership_ttl_sec = 30;
-    p.hot_pool.new_token_grace_sec = 360;
-    p.tape.min_price_change_1m = 0;
-    p.tape.require_price_change_5m = true;
+    for (const strategy of Object.values(p.strategy)) {
+      strategy.hot_pool.enabled = true;
+      strategy.hot_pool.membership_ttl_sec = 30;
+      strategy.hot_pool.new_token_grace_sec = 360;
+      strategy.tape.min_price_change_1m = 0;
+      strategy.tape.require_price_change_5m = true;
+    }
   });
 }
 
@@ -138,7 +140,7 @@ test("a verified young 1m-ranked token may pass while 5m data is not formed", ()
 
 test("hot-pool mode can pass without smart-money trades when confirmation is disabled", async () => {
   const p = params();
-  p.flow.require_smart_money = false;
+  p.strategy.sol.flow.require_smart_money = false;
   const entry = ready({
     trades: [],
     rank_1m: 1,
@@ -185,16 +187,16 @@ test("extreme 1m momentum is tagged rather than rejected", () => {
   });
   const pass = evaluatePass(entry, p, now);
   assert.equal(pass.kind, "pass");
-  assert.equal(momentumTier(450, p), "extreme");
+  assert.equal(momentumTier(450, p, "sol"), "extreme");
   assert.equal(buildSignal(entry, p, now, pass).evidence.momentum_tier, "extreme");
 });
 
 test("BSC market-cap floor is inclusive at $10k", () => {
   const p = params();
-  p.pass.min_entry_mc.bsc = 10_000;
-  p.pass.min_liquidity_usd.bsc = 10_000;
-  p.tape.min_volume_market_cap_ratio = 0.5;
-  p.tape.max_volume_market_cap_ratio = 2;
+  p.strategy.bsc.pass.min_entry_mc = 10_000;
+  p.strategy.bsc.pass.min_liquidity_usd = 10_000;
+  p.strategy.bsc.tape.min_volume_market_cap_ratio = 0.5;
+  p.strategy.bsc.tape.max_volume_market_cap_ratio = 2;
   const entry: CacheEntry = {
     ...ready({
       tape: { ...GOOD_TAPE, volume: 8_000 },

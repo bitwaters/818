@@ -316,8 +316,8 @@ test("decision events keep rule version, exact rejection evidence, and shadow fi
 test("hot-pool mode excludes non-ranked cache mutations and records pool coverage", () => {
   const db = new Database(":memory:");
   const params = recorderParams();
-  params.hot_pool.enabled = true;
-  params.hot_pool.membership_ttl_sec = 30;
+  params.strategy.sol.hot_pool.enabled = true;
+  params.strategy.sol.hot_pool.membership_ttl_sec = 30;
   const rec = new TickRecorder(db, params, pino({ level: "silent" }));
   const cache = new TokenCache();
   const now = 1_700_000_000_000;
@@ -391,7 +391,7 @@ test("idle expire writes a final tick; cooled until off-list; mc move keeps the 
   liveRec.stop();
 });
 
-test("stale visiting is not usable for boost; leaving hot list clears it", () => {
+test("stale visiting is incomplete; leaving hot list clears it", () => {
   const params = testParams();
   const now = 1_700_000_000_000;
   const stale: CacheEntry = {
@@ -407,11 +407,10 @@ test("stale visiting is not usable for boost; leaving hot list clears it", () =>
     market_cap_written_at: now,
   };
   const stalePass = evaluatePass(stale, params, now);
-  assert.equal(stalePass.kind, "drop");
-  assert.equal(stalePass.kind === "drop" ? stalePass.reason : "", "pass_formula");
+  assert.deepEqual(stalePass, { kind: "skip", reason: "visiting_incomplete" });
 
   const staleCluster = evaluatePass({ ...stale, trades: twoBuys(now) }, params, now);
-  assert.equal(staleCluster.kind, "pass");
+  assert.deepEqual(staleCluster, { kind: "skip", reason: "visiting_incomplete" });
 
   const cache = new TokenCache();
   cache.writeVisiting("sol", SOL_CA, 80, now);

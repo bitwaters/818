@@ -8,6 +8,49 @@ const chainBool = z.object({
   bsc: z.boolean(),
 });
 
+const flowSchema = z.object({
+  require_smart_money: z.boolean().default(true),
+  min_smart_wallets: z.number().int().min(1),
+  require_net_buy: z.boolean(),
+  min_price_change_since_entry: z.number(),
+});
+
+const tapeSchema = z.object({
+  min_volume_usd: z.number().nonnegative(),
+  min_swaps: z.number().nonnegative(),
+  min_price_change_1m: z.number().nonnegative(),
+  /** 达到该 1m 涨幅视为追高；0 关闭 */
+  max_price_change_1m: z.number().nonnegative().default(0),
+  high_momentum_1m: z.number().nonnegative().default(100),
+  extreme_momentum_1m: z.number().nonnegative().default(300),
+  min_price_change_5m: z.number().nonnegative(),
+  /** true 时缺少新鲜 5m 动量只等待，不允许直接放行。 */
+  require_price_change_5m: z.boolean().default(false),
+  /** 买/卖笔数比 ≥ 此值视为假动量否决；0 关闭 */
+  max_buy_sell_ratio: z.number().nonnegative().default(0),
+  /** 1m 成交量 / 市值的合理区间；0 关闭对应边界 */
+  min_volume_market_cap_ratio: z.number().nonnegative().default(0),
+  max_volume_market_cap_ratio: z.number().nonnegative().default(0),
+});
+
+const chainStrategySchema = z.object({
+  mode: z.enum(["live", "shadow", "off"]),
+  hot_pool: z.object({
+    enabled: z.boolean().default(true),
+    membership_ttl_sec: z.number().int().positive().default(30),
+    new_token_grace_sec: z.number().int().nonnegative().default(360),
+  }),
+  pass: z.object({
+    min_entry_mc: z.number().nonnegative().default(0),
+    min_liquidity_usd: z.number().nonnegative().default(0),
+  }),
+  flow: flowSchema,
+  tape: tapeSchema,
+  attention: z.object({
+    min_visiting_count: z.number().nonnegative(),
+  }),
+});
+
 const ParamsSchema = z.object({
   rules: z
     .object({
@@ -28,16 +71,10 @@ const ParamsSchema = z.object({
   }),
   hot_pool: z
     .object({
-      enabled: z.boolean().default(false),
       rank_limit: z.number().int().min(1).max(100).default(100),
-      membership_ttl_sec: z.number().int().positive().default(30),
-      new_token_grace_sec: z.number().int().nonnegative().default(360),
     })
     .default({
-      enabled: false,
       rank_limit: 100,
-      membership_ttl_sec: 30,
-      new_token_grace_sec: 360,
     }),
   cache: z.object({
     evidence_ttl_sec: z.number().int().positive(),
@@ -52,47 +89,11 @@ const ParamsSchema = z.object({
     signal_7: z.boolean(),
     signal_10: z.boolean(),
   }),
-  pass: z.object({
-    visiting_can_boost: z.boolean(),
-    signal_enabled: chainBool.default({ sol: true, bsc: true }),
-    min_entry_mc: z
-      .object({
-        sol: z.number().nonnegative().default(0),
-        bsc: z.number().nonnegative().default(0),
-      })
-      .default({ sol: 0, bsc: 0 }),
-    min_liquidity_usd: z
-      .object({
-        sol: z.number().nonnegative().default(0),
-        bsc: z.number().nonnegative().default(0),
-      })
-      .default({ sol: 0, bsc: 0 }),
-  }),
-  flow: z.object({
-    require_smart_money: z.boolean().default(true),
-    min_smart_wallets: z.number().int().min(1),
-    require_net_buy: z.boolean(),
-    min_price_change_since_entry: z.number(),
-  }),
-  tape: z.object({
-    min_volume_usd: z.number().nonnegative(),
-    min_swaps: z.number().nonnegative(),
-    min_price_change_1m: z.number().nonnegative(),
-    /** 达到该 1m 涨幅视为追高；0 关闭 */
-    max_price_change_1m: z.number().nonnegative().default(0),
-    high_momentum_1m: z.number().nonnegative().default(100),
-    extreme_momentum_1m: z.number().nonnegative().default(300),
-    min_price_change_5m: z.number().nonnegative(),
-    /** true 时缺少新鲜 5m 动量只等待，不允许直接放行。 */
-    require_price_change_5m: z.boolean().default(false),
-    /** 买/卖笔数比 ≥ 此值视为假动量否决；0 关闭 */
-    max_buy_sell_ratio: z.number().nonnegative().default(0),
-    /** 1m 成交量 / 市值的合理区间；0 关闭对应边界 */
-    min_volume_market_cap_ratio: z.number().nonnegative().default(0),
-    max_volume_market_cap_ratio: z.number().nonnegative().default(0),
+  strategy: z.object({
+    sol: chainStrategySchema,
+    bsc: chainStrategySchema,
   }),
   attention: z.object({
-    min_visiting_count: z.number().nonnegative(),
     use_interval: z.string().min(1),
   }),
   l0_sol: z.object({
@@ -177,6 +178,14 @@ const ParamsSchema = z.object({
 });
 
 export type Params = z.infer<typeof ParamsSchema>;
+export type ChainStrategy = Params["strategy"]["sol"];
+
+export function strategyFor(
+  params: Params,
+  chain: keyof Params["strategy"],
+): ChainStrategy {
+  return params.strategy[chain];
+}
 
 export function loadParams(path = resolve(process.cwd(), "params.yaml")): Params {
   let raw: unknown;

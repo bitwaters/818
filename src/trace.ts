@@ -17,9 +17,9 @@ import {
   momentumTier,
 } from "./hotpool.js";
 import type { Logger } from "./logger.js";
-import type { Params } from "./params.js";
+import { strategyFor, type Params } from "./params.js";
 import { lastSides } from "./pass.js";
-import type { CacheEntry, Chain, DecisionRecord } from "./types.js";
+import type { CacheEntry, Chain, DecisionRecord, Signal } from "./types.js";
 
 const MAX_BUFFER = 5000;
 
@@ -166,11 +166,12 @@ function snapshotOf(
   now: number,
   pushed: boolean,
 ): TickSnapshot {
+  const strategy = strategyFor(params, entry.chain);
   const sides = lastSides(
     entry.trades,
     now,
     params.cache.evidence_ttl_sec,
-    params.flow.min_price_change_since_entry,
+    strategy.flow.min_price_change_since_entry,
   );
   const tape = usableTape1m(entry, now, params.cache.evidence_ttl_sec) ?? {};
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec) ?? null;
@@ -234,6 +235,8 @@ export class TickRecorder {
   private readonly upsertCandidate;
   private readonly insertDecision;
   private readonly insertPoolSnapshot;
+  private readonly insertShadowSignal;
+  private readonly hasShadowSignalStmt;
   private readonly pruneStmt;
   private readonly pruneDecisionsStmt;
   private readonly prunePoolSnapshotsStmt;
@@ -371,6 +374,37 @@ export class TickRecorder {
         eligible_2_count INTEGER NOT NULL
       )
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS shadow_signals (
+        rule_version TEXT NOT NULL,
+        chain TEXT NOT NULL,
+        ca TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        symbol TEXT,
+        pass_kind TEXT,
+        hot_pool_lane TEXT,
+        momentum_tier TEXT,
+        visiting INTEGER NOT NULL,
+        volume REAL,
+        swaps INTEGER,
+        buys INTEGER,
+        sells INTEGER,
+        pc_1m REAL,
+        pc_5m REAL,
+        mc REAL,
+        liquidity REAL,
+        smart_wallets INTEGER NOT NULL,
+        buy_wallets INTEGER NOT NULL,
+        sell_wallets INTEGER NOT NULL,
+        buy_usd REAL,
+        sell_usd REAL,
+        rank_1m INTEGER,
+        rank_5m INTEGER,
+        created_at INTEGER,
+        l0_json TEXT NOT NULL,
+        PRIMARY KEY (rule_version, chain, ca)
+      )
+    `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ca_ts ON ticks (chain, ca, ts)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ts ON ticks (ts)`);
     this.db.exec(
@@ -467,6 +501,22 @@ export class TickRecorder {
         @smartmoney_count, @eligible_2_count
       )
     `);
+    this.insertShadowSignal = this.db.prepare(`
+      INSERT OR IGNORE INTO shadow_signals (
+        rule_version, chain, ca, ts, symbol, pass_kind, hot_pool_lane, momentum_tier,
+        visiting, volume, swaps, buys, sells, pc_1m, pc_5m, mc, liquidity,
+        smart_wallets, buy_wallets, sell_wallets, buy_usd, sell_usd,
+        rank_1m, rank_5m, created_at, l0_json
+      ) VALUES (
+        @rule_version, @chain, @ca, @ts, @symbol, @pass_kind, @hot_pool_lane, @momentum_tier,
+        @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @pc_5m, @mc, @liquidity,
+        @smart_wallets, @buy_wallets, @sell_wallets, @buy_usd, @sell_usd,
+        @rank_1m, @rank_5m, @created_at, @l0_json
+      )
+    `);
+    this.hasShadowSignalStmt = this.db.prepare(`
+      SELECT 1 FROM shadow_signals WHERE rule_version = ? AND chain = ? AND ca = ? LIMIT 1
+    `);
     this.pruneStmt = this.db.prepare(`DELETE FROM ticks WHERE ts < ?`);
     this.pruneDecisionsStmt = this.db.prepare(`DELETE FROM decision_events WHERE ts < ?`);
     this.prunePoolSnapshotsStmt = this.db.prepare(`DELETE FROM hot_pool_snapshots WHERE ts < ?`);
@@ -474,6 +524,8 @@ export class TickRecorder {
   }
 
   start(): void {
+    // 影子模式可单独使用同步基线存储；关闭 trace 时不得启动旧轨迹的采样/清理定时器。
+    if (!this.params.trace.enabled) return;
     const trace = this.params.trace;
     this.flushTimer = setInterval(() => this.flush(), trace.flush_ms);
     this.pruneTimer = setInterval(() => this.maintain(Date.now()), 60_000);
@@ -553,11 +605,12 @@ export class TickRecorder {
     if (this.decisionStates.get(stateKey)?.fingerprint === fingerprint) return;
     const entry = record.entry;
     const now = record.ts;
+    const strategy = strategyFor(this.params, entry.chain);
     const sides = lastSides(
       entry.trades,
       now,
       this.params.cache.evidence_ttl_sec,
-      this.params.flow.min_price_change_since_entry,
+      strategy.flow.min_price_change_since_entry,
     );
     const tape = usableTape1m(entry, now, this.params.cache.evidence_ttl_sec) ?? {};
     const l0 = usableL0(entry, now, this.params.cache.evidence_ttl_sec);
@@ -585,7 +638,7 @@ export class TickRecorder {
         buys: tape.buys ?? null,
         sells: tape.sells ?? null,
         pc_1m: tape.price_change_1m ?? null,
-        pc_5m: this.params.hot_pool.enabled
+        pc_5m: strategy.hot_pool.enabled
           ? (hotPoolPrice5m(entry, this.params, now) ?? null)
           : (usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null),
         mc: usableMarketCap(entry, now, this.params.cache.evidence_ttl_sec) ?? null,
@@ -594,7 +647,9 @@ export class TickRecorder {
         shadow_json: JSON.stringify(shadowRiskSnapshot(l0)),
         hot_pool_lane: lane ?? null,
         momentum_tier:
-          tape.price_change_1m == null ? null : momentumTier(tape.price_change_1m, this.params),
+          tape.price_change_1m == null
+            ? null
+            : momentumTier(tape.price_change_1m, this.params, entry.chain),
         rank_1m: isFreshRank1m(entry, this.params, now) ? (entry.rank_1m ?? null) : null,
         rank_5m: isFreshRank5m(entry, this.params, now) ? (entry.rank_5m ?? null) : null,
         rank_1m_seen_at: entry.rank_1m_seen_at ?? null,
@@ -611,7 +666,8 @@ export class TickRecorder {
   }
 
   notePoolSnapshot(cache: TokenCache, chain: Chain, now: number): void {
-    if (!this.params.trace.enabled || !this.params.hot_pool.enabled) return;
+    const strategy = strategyFor(this.params, chain);
+    if (!this.params.trace.enabled || !strategy.hot_pool.enabled) return;
     let rank1 = 0;
     let rank5 = 0;
     let candidates = 0;
@@ -633,8 +689,8 @@ export class TickRecorder {
           entry.trades,
           now,
           this.params.cache.evidence_ttl_sec,
-          this.params.flow.min_price_change_since_entry,
-        ).eligible >= this.params.flow.min_smart_wallets
+          strategy.flow.min_price_change_since_entry,
+        ).eligible >= strategy.flow.min_smart_wallets
       ) {
         eligible2 += 1;
       }
@@ -655,6 +711,53 @@ export class TickRecorder {
         { err: err instanceof Error ? err.message : "hot_pool_snapshot_failed", chain },
         "hot pool snapshot insert failed",
       );
+    }
+  }
+
+  hasShadowSignal(ruleVersion: string, chain: Chain, ca: string): boolean {
+    return this.hasShadowSignalStmt.get(ruleVersion, chain, ca) != null;
+  }
+
+  /** 影子样本只保留同一规则版本的第一次完整过线基线。 */
+  noteShadowSignal(signal: Signal): boolean {
+    const ev = signal.evidence;
+    if (ev.visiting_count == null || !Number.isFinite(ev.visiting_count)) return false;
+    try {
+      const result = this.insertShadowSignal.run({
+        rule_version: signal.rule_version,
+        chain: signal.chain,
+        ca: signal.ca,
+        ts: signal.ts,
+        symbol: signal.symbol || null,
+        pass_kind: ev.pass_kind ?? null,
+        hot_pool_lane: ev.hot_pool_lane ?? null,
+        momentum_tier: ev.momentum_tier ?? null,
+        visiting: ev.visiting_count,
+        volume: ev.volume ?? null,
+        swaps: ev.swaps ?? null,
+        buys: ev.buys ?? null,
+        sells: ev.sells ?? null,
+        pc_1m: ev.price_change_1m ?? null,
+        pc_5m: ev.price_change_5m ?? null,
+        mc: ev.market_cap ?? null,
+        liquidity: ev.liquidity ?? null,
+        smart_wallets: ev.smart_wallets,
+        buy_wallets: ev.buy_wallets,
+        sell_wallets: ev.sell_wallets,
+        buy_usd: ev.buy_usd ?? null,
+        sell_usd: ev.sell_usd ?? null,
+        rank_1m: ev.rank_1m ?? null,
+        rank_5m: ev.rank_5m ?? null,
+        created_at: ev.created_at ?? null,
+        l0_json: JSON.stringify(signal.l0),
+      });
+      return result.changes === 1 || this.hasShadowSignal(signal.rule_version, signal.chain, signal.ca);
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : "shadow_signal_insert_failed" },
+        "shadow signal insert failed",
+      );
+      return false;
     }
   }
 
@@ -730,6 +833,7 @@ export class TickRecorder {
   }
 
   private enqueueCandidate(entry: CacheEntry, snap: TickSnapshot, now: number): void {
+    const strategy = strategyFor(this.params, entry.chain);
     this.candidateBuffer.push({
       ts: now,
       chain: entry.chain,
@@ -752,16 +856,18 @@ export class TickRecorder {
         entry.trades,
         now,
         this.params.cache.evidence_ttl_sec,
-        this.params.flow.min_price_change_since_entry,
+        strategy.flow.min_price_change_since_entry,
       ).hasUsd
         ? 1
         : 0,
-      pc_5m: this.params.hot_pool.enabled
+      pc_5m: strategy.hot_pool.enabled
         ? (hotPoolPrice5m(entry, this.params, now) ?? null)
         : (usablePriceChange5m(entry, now, this.params.cache.evidence_ttl_sec) ?? null),
       hot_pool_lane: hotPoolLane(entry, this.params, now) ?? null,
       momentum_tier:
-        snap.pc_1m == null ? null : momentumTier(snap.pc_1m, this.params),
+        snap.pc_1m == null
+          ? null
+          : momentumTier(snap.pc_1m, this.params, entry.chain),
       rank_1m: isFreshRank1m(entry, this.params, now) ? (entry.rank_1m ?? null) : null,
       rank_5m: isFreshRank5m(entry, this.params, now) ? (entry.rank_5m ?? null) : null,
       rank_1m_seen_at: entry.rank_1m_seen_at ?? null,

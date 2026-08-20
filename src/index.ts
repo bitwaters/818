@@ -39,7 +39,12 @@ export function start(opts?: { paramsPath?: string }): {
   );
   const sqlite = openSqlite(params.stats.sqlite_path);
   const store = params.stats.enabled ? new StatsStore(params, logger, sqlite) : null;
-  const trace = params.trace.enabled ? new TickRecorder(sqlite, params, logger) : null;
+  const hasShadowStrategy = Object.values(params.strategy).some(
+    (strategy) => strategy.mode === "shadow",
+  );
+  const trace = params.trace.enabled || hasShadowStrategy
+    ? new TickRecorder(sqlite, params, logger)
+    : null;
   resetAnalyticsOnce(sqlite, params.rules.reset_id, params.rules.version, Date.now(), logger);
   resetDeliveryOnce(
     sqlite,
@@ -92,6 +97,9 @@ export function start(opts?: { paramsPath?: string }): {
     },
     recordDecision: (record) => trace?.noteDecision(record),
     recordPoolSnapshot: (chain, ts) => trace?.notePoolSnapshot(cache, chain, ts),
+    hasShadowSignal: (ruleVersion, chain, ca) =>
+      trace?.hasShadowSignal(ruleVersion, chain, ca) ?? false,
+    recordShadowSignal: (signal) => trace?.noteShadowSignal(signal) ?? false,
     emit: (signal) => {
       for (const fn of listeners) {
         try {

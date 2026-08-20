@@ -28,16 +28,20 @@ export const BASE_PARAMS: Params = parseParams(
 export function testParams(mut?: (p: Params) => void): Params {
   const params = structuredClone(BASE_PARAMS);
   // 大多数金样例只验证原有单一规则；新增生产过滤由专项用例覆盖。
-  params.pass.signal_enabled = { sol: true, bsc: true };
-  params.hot_pool.enabled = false;
-  params.flow.require_smart_money = true;
-  params.tape.min_price_change_1m = 20;
-  params.tape.max_price_change_1m = 0;
-  params.tape.require_price_change_5m = false;
-  params.tape.min_volume_market_cap_ratio = 0;
-  params.tape.max_volume_market_cap_ratio = 0;
-  params.pass.min_entry_mc.bsc = 0;
-  params.pass.min_liquidity_usd = { sol: 0, bsc: 0 };
+  for (const strategy of Object.values(params.strategy)) {
+    strategy.mode = "live";
+    strategy.hot_pool.enabled = false;
+    strategy.flow.require_smart_money = true;
+    strategy.tape.min_price_change_1m = 20;
+    strategy.tape.max_price_change_1m = 0;
+    strategy.tape.require_price_change_5m = false;
+    strategy.tape.min_volume_market_cap_ratio = 0;
+    strategy.tape.max_volume_market_cap_ratio = 0;
+    strategy.pass.min_entry_mc = 0;
+    strategy.pass.min_liquidity_usd = 0;
+  }
+  // 旧金样例保留 SOL $10k 市值门槛；BSC 专项用例自行开启生产门槛。
+  params.strategy.sol.pass.min_entry_mc = 10_000;
   params.l0_bsc.min_holder_count = 0;
   params.l0_bsc.bot_degen_rate_max = 0;
   mut?.(params);
@@ -129,6 +133,7 @@ export interface Harness {
   inserted: Signal[];
   securityCalls: { chain: Chain; ca: string }[];
   decisions: DecisionRecord[];
+  shadowSignals: Signal[];
   now: number;
 }
 
@@ -137,6 +142,7 @@ export function makeHarness(opts?: {
   now?: number;
   fetchSecurity?: (chain: Chain, ca: string) => Promise<Record<string, unknown> | null>;
   insertImpl?: (signal: Signal) => void;
+  initialPushed?: { chain: Chain; ca: string; ts: number };
 }): Harness {
   const params = opts?.params ?? testParams();
   const now = opts?.now ?? 1_700_000_000_000;
@@ -148,11 +154,21 @@ export function makeHarness(opts?: {
   const inserted: Signal[] = [];
   const securityCalls: { chain: Chain; ca: string }[] = [];
   const decisions: DecisionRecord[] = [];
+  const shadowSignals: Signal[] = [];
+  const shadowKeys = new Set<string>();
   const logger = pino({ level: "silent" });
   const clock = { now };
   const dests = telegram.destinations();
   const pushed = new Map<string, number>();
   const destKey = (chain: Chain, ca: string, chatId: string) => `${chain}:${ca}:${chatId}`;
+  if (opts?.initialPushed) {
+    for (const id of dests) {
+      pushed.set(
+        destKey(opts.initialPushed.chain, opts.initialPushed.ca, id),
+        opts.initialPushed.ts,
+      );
+    }
+  }
   const recent = (chain: Chain, ca: string, chatId: string, at: number) => {
     const ts = pushed.get(destKey(chain, ca, chatId));
     return ts != null && ts > at - params.cache.push_cooldown_sec * 1000;
@@ -190,6 +206,14 @@ export function makeHarness(opts?: {
     },
     ensureInserted: insertSignal,
     recordDecision: (record) => decisions.push(record),
+    hasShadowSignal: (ruleVersion, chain, ca) =>
+      shadowKeys.has(`${ruleVersion}:${chain}:${ca}`),
+    recordShadowSignal: (signal) => {
+      const key = `${signal.rule_version}:${signal.chain}:${signal.ca}`;
+      if (!shadowKeys.has(key)) shadowSignals.push(signal);
+      shadowKeys.add(key);
+      return true;
+    },
     emit: (s) => {
       emitted.push(s);
     },
@@ -205,6 +229,7 @@ export function makeHarness(opts?: {
     inserted,
     securityCalls,
     decisions,
+    shadowSignals,
     now,
   };
   Object.defineProperty(harness, "now", {

@@ -255,9 +255,9 @@ describe("聪明钱金额净买", () => {
 describe("回放调优后的盘口边界", () => {
   const tuned = () =>
     testParams((p) => {
-      p.tape.max_price_change_1m = 200;
-      p.tape.min_volume_market_cap_ratio = 0.5;
-      p.tape.max_volume_market_cap_ratio = 2;
+      p.strategy.bsc.tape.max_price_change_1m = 200;
+      p.strategy.bsc.tape.min_volume_market_cap_ratio = 0.5;
+      p.strategy.bsc.tape.max_volume_market_cap_ratio = 2;
     });
 
   it("1m 涨幅达到 200% 作为追高否决", async () => {
@@ -286,7 +286,7 @@ describe("回放调优后的盘口边界", () => {
 
   it("禁用链只停止信号，不影响数据源配置", async () => {
     const params = testParams((p) => {
-      p.pass.signal_enabled.sol = false;
+      p.strategy.sol.mode = "off";
     });
     const h = makeHarness({ params });
     seedReady(h);
@@ -315,12 +315,12 @@ describe("回放调优后的盘口边界", () => {
 describe("BSC v3 临时安全护栏", () => {
   const guarded = () =>
     testParams((p) => {
-      p.pass.min_entry_mc.bsc = 30_000;
-      p.pass.min_liquidity_usd.bsc = 10_000;
-      p.tape.max_price_change_1m = 100;
-      p.tape.require_price_change_5m = true;
-      p.tape.min_volume_market_cap_ratio = 0.5;
-      p.tape.max_volume_market_cap_ratio = 2;
+      p.strategy.bsc.pass.min_entry_mc = 30_000;
+      p.strategy.bsc.pass.min_liquidity_usd = 10_000;
+      p.strategy.bsc.tape.max_price_change_1m = 100;
+      p.strategy.bsc.tape.require_price_change_5m = true;
+      p.strategy.bsc.tape.min_volume_market_cap_ratio = 0.5;
+      p.strategy.bsc.tape.max_volume_market_cap_ratio = 2;
       p.l0_bsc.min_holder_count = 50;
       p.l0_bsc.bot_degen_rate_max = 0.3;
     });

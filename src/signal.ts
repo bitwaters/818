@@ -7,7 +7,7 @@ import {
   usableVisiting,
 } from "./cache.js";
 import { hotPoolPrice5m, momentumTier } from "./hotpool.js";
-import type { Params } from "./params.js";
+import { strategyFor, type Params } from "./params.js";
 import { evaluatePass, lastSides, type PassResult } from "./pass.js";
 import type { CacheEntry, PassKind, Signal } from "./types.js";
 
@@ -29,15 +29,16 @@ export function buildSignal(
   pass: PassResult = evaluatePass(entry, params, now),
 ): Signal {
   const tape = usableTape1m(entry, now, params.cache.evidence_ttl_sec) ?? {};
+  const strategy = strategyFor(params, entry.chain);
   const sides = lastSides(
     entry.trades,
     now,
     params.cache.evidence_ttl_sec,
-    params.flow.min_price_change_since_entry,
+    strategy.flow.min_price_change_since_entry,
   );
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
   const visiting = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
-  const pc5 = params.hot_pool.enabled
+  const pc5 = strategy.hot_pool.enabled
     ? hotPoolPrice5m(entry, params, now)
     : usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
   const liquidity = usableLiquidity(entry, now, params.cache.evidence_ttl_sec);
@@ -60,7 +61,7 @@ export function buildSignal(
       ...(kind ? { pass_kind: kind } : {}),
       ...(pass.kind === "pass" ? { hot_pool_lane: pass.hot_pool_lane } : {}),
       ...(tape.price_change_1m != null
-        ? { momentum_tier: momentumTier(tape.price_change_1m, params) }
+        ? { momentum_tier: momentumTier(tape.price_change_1m, params, entry.chain) }
         : {}),
       ...(entry.rank_1m != null ? { rank_1m: entry.rank_1m } : {}),
       ...(entry.rank_5m != null ? { rank_5m: entry.rank_5m } : {}),

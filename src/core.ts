@@ -2,7 +2,7 @@ import { TokenCache, cacheKey, normalizeCa } from "./cache.js";
 import { checkL0 } from "./l0/index.js";
 import { hotPoolLane, isFreshRank1m } from "./hotpool.js";
 import type { Logger } from "./logger.js";
-import type { Params } from "./params.js";
+import { strategyFor, type Params } from "./params.js";
 import { eligibleCount, evaluatePass } from "./pass.js";
 import type { TelegramSender } from "./push/telegram.js";
 import { QuotaTracker } from "./quota.js";
@@ -32,11 +32,14 @@ export interface PipelineDeps {
   ensureInserted: (signal: Signal) => void;
   recordDecision?: (record: DecisionRecord) => void;
   recordPoolSnapshot?: (chain: Chain, ts: number) => void;
+  hasShadowSignal?: (ruleVersion: string, chain: Chain, ca: string) => boolean;
+  recordShadowSignal?: (signal: Signal) => boolean;
 }
 
 export class Pipeline {
   private readonly pending = new Set<string>();
   private readonly cooldownUntil = new Map<string, number>();
+  private readonly shadowed = new Set<string>();
   private readonly locks = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: PipelineDeps) {}
@@ -47,6 +50,7 @@ export class Pipeline {
   }
 
   isCooling(chain: Chain, ca: string, now = this.deps.now()): boolean {
+    if (strategyFor(this.deps.params, chain).mode !== "live") return false;
     const key = cacheKey(chain, ca);
     if (!key) return false;
     const normalized = normalizeCa(chain, ca);
@@ -124,8 +128,10 @@ export class Pipeline {
     cache.pruneTrades(chain, rawCa, now, params.cache.evidence_ttl_sec);
     const entry = cache.get(chain, rawCa);
     if (!entry) return { decision: "skip", reason: "not_in_cache" };
+    const strategy = strategyFor(params, chain);
+    const shadowKey = `${params.rules.version}:${key}`;
     // 中央门禁：任何来源都不能让非热门代币进入候选漏斗或 security 配额。
-    if (params.hot_pool.enabled && !hotPoolLane(entry, params, now)) {
+    if (strategy.hot_pool.enabled && !hotPoolLane(entry, params, now)) {
       return {
         decision: "skip",
         reason: isFreshRank1m(entry, params, now)
@@ -152,13 +158,23 @@ export class Pipeline {
       this.deps.recordDecision?.({ entry, decision: "pass", reason, stage, ts: at });
     };
 
-    if (this.pending.has(key)) return done({ decision: "skip", reason: "pending" }, "cache", now);
-    if (this.deps.hasPushedAll(chain, entry.ca, now)) {
-      return done({ decision: "skip", reason: "cooldown" }, "cache", now);
-    }
-    const cool = this.cooldownUntil.get(key);
-    if (cool != null && now < cool) {
-      return done({ decision: "skip", reason: "cooldown" }, "cache", now);
+    if (strategy.mode === "shadow") {
+      if (
+        this.shadowed.has(shadowKey) ||
+        this.deps.hasShadowSignal?.(params.rules.version, chain, entry.ca)
+      ) {
+        this.shadowed.add(shadowKey);
+        return done({ decision: "skip", reason: "shadow_recorded" }, "cache", now);
+      }
+    } else {
+      if (this.pending.has(key)) return done({ decision: "skip", reason: "pending" }, "cache", now);
+      if (this.deps.hasPushedAll(chain, entry.ca, now)) {
+        return done({ decision: "skip", reason: "cooldown" }, "cache", now);
+      }
+      const cool = this.cooldownUntil.get(key);
+      if (cool != null && now < cool) {
+        return done({ decision: "skip", reason: "cooldown" }, "cache", now);
+      }
     }
 
     // 先跑无需额外 API 的盘口/资金流条件，避免不可能过线的币耗尽 security 配额。
@@ -175,7 +191,7 @@ export class Pipeline {
     const l0 = checkL0(entry, params, now);
     if (l0.kind === "incomplete") {
       const eligible = eligibleCount(entry, params, now);
-      if (params.flow.require_smart_money && eligible === 0) {
+      if (strategy.flow.require_smart_money && eligible === 0) {
         return done({ decision: "skip", reason: "l0_incomplete_no_eligible" }, "security", now);
       }
       if (!quota.canSecurity(chain, now)) {
@@ -219,6 +235,16 @@ export class Pipeline {
     passed("final", "final_pass", finalNow);
 
     const signal = buildSignal(finalEntry, params, finalNow, pass);
+    if (strategy.mode === "shadow") {
+      const recorded = this.deps.recordShadowSignal?.(signal) ?? false;
+      if (recorded) this.shadowed.add(shadowKey);
+      quota.removeSkipped(chain, entry.ca);
+      return done(
+        { decision: "skip", reason: recorded ? "shadow_pass" : "shadow_record_failed", signal },
+        "delivery",
+        finalNow,
+      );
+    }
     if (!params.push.telegram_enabled) {
       return done({ decision: "skip", reason: "telegram_disabled", signal }, "delivery", finalNow);
     }

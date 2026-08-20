@@ -7,6 +7,7 @@ const ANALYTICS_TABLES = [
   "candidates",
   "decision_events",
   "hot_pool_snapshots",
+  "shadow_signals",
 ] as const;
 
 export interface ResetResult {

@@ -107,7 +107,7 @@ describe("hot-searches 入榜不清浏览", () => {
     assert.equal(pass.kind === "drop" ? pass.reason : "", "visiting");
   });
 
-  it("离榜不清浏览，TTL 内仍否决，过期后才放行", () => {
+  it("离榜不清浏览，TTL 内仍否决，过期后视为字段不完整", () => {
     const cache = new TokenCache();
     const now = 1_700_000_000_000;
     cache.writeVisiting("sol", SOL_CA, 80, now);
@@ -123,6 +123,6 @@ describe("hot-searches 入榜不清浏览", () => {
     assert.equal(stillHot.kind, "drop");
     assert.equal(stillHot.kind === "drop" ? stillHot.reason : "", "visiting");
     const afterTtl = passAt(cache, now + 200_000);
-    assert.equal(afterTtl.kind, "pass");
+    assert.deepEqual(afterTtl, { kind: "skip", reason: "visiting_incomplete" });
   });
 });

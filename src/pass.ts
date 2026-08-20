@@ -7,7 +7,7 @@ import {
   usableVisiting,
 } from "./cache.js";
 import { hotPoolLane, hotPoolPrice5m, isFreshRank1m } from "./hotpool.js";
-import type { Params } from "./params.js";
+import { strategyFor, type ChainStrategy, type Params } from "./params.js";
 import type { CacheEntry, HotPoolLane, SmartTrade, Tape1m } from "./types.js";
 
 export interface LastSides {
@@ -89,7 +89,7 @@ export function tapeComplete(tape: Partial<Tape1m> | undefined): tape is Tape1m 
   );
 }
 
-export function tapeOk(tape: Tape1m, params: Params["tape"]): boolean {
+export function tapeOk(tape: Tape1m, params: ChainStrategy["tape"]): boolean {
   const priceOk =
     params.min_price_change_1m === 0
       ? tape.price_change_1m > 0
@@ -105,7 +105,7 @@ export function tapeOk(tape: Tape1m, params: Params["tape"]): boolean {
 export function tapeVolumeMarketCapOk(
   tape: Tape1m,
   marketCap: number,
-  params: Params["tape"],
+  params: ChainStrategy["tape"],
 ): boolean {
   const ratio = tape.volume / marketCap;
   if (params.min_volume_market_cap_ratio > 0 && ratio < params.min_volume_market_cap_ratio) {
@@ -138,6 +138,7 @@ export type PassResult =
         | "tape_incomplete"
         | "hot_1m_incomplete"
         | "tape_5m_incomplete"
+        | "visiting_incomplete"
         | "entry_mc_incomplete"
         | "liquidity_incomplete";
     }
@@ -151,7 +152,8 @@ export type PassResult =
     };
 
 export function evaluatePass(entry: CacheEntry, params: Params, now: number): PassResult {
-  if (!params.pass.signal_enabled[entry.chain]) return { kind: "drop", reason: "chain_disabled" };
+  const strategy = strategyFor(params, entry.chain);
+  if (strategy.mode === "off") return { kind: "drop", reason: "chain_disabled" };
   const lane = hotPoolLane(entry, params, now);
   if (!lane) {
     return {
@@ -165,51 +167,54 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     entry.trades,
     now,
     params.cache.evidence_ttl_sec,
-    params.flow.min_price_change_since_entry,
+    strategy.flow.min_price_change_since_entry,
   );
-  const net = netBuyOk(sides, params.flow.require_net_buy);
+  const net = netBuyOk(sides, strategy.flow.require_net_buy);
   const vis = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
-  const pc5 = params.hot_pool.enabled
+  const pc5 = strategy.hot_pool.enabled
     ? hotPoolPrice5m(entry, params, now)
     : usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
   const tape = usableTape1m(entry, now, params.cache.evidence_ttl_sec);
   if (!tapeComplete(tape)) return { kind: "skip", reason: "tape_incomplete" };
-  if (!tapeOk(tape, params.tape)) return { kind: "drop", reason: "tape" };
+  if (!tapeOk(tape, strategy.tape)) return { kind: "drop", reason: "tape" };
   if (
-    params.tape.max_price_change_1m > 0 &&
-    tape.price_change_1m >= params.tape.max_price_change_1m
+    strategy.tape.max_price_change_1m > 0 &&
+    tape.price_change_1m >= strategy.tape.max_price_change_1m
   ) {
     return { kind: "drop", reason: "tape_chase" };
   }
-  if (tapeFakeMomentum(tape, params.tape.max_buy_sell_ratio)) {
+  if (tapeFakeMomentum(tape, strategy.tape.max_buy_sell_ratio)) {
     return { kind: "drop", reason: "tape_fake" };
   }
-  if (params.tape.require_price_change_5m && pc5 == null && lane !== "new_token") {
+  if (strategy.tape.require_price_change_5m && pc5 == null && lane !== "new_token") {
     return { kind: "skip", reason: "tape_5m_incomplete" };
   }
-  if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
+  if (pc5 != null && !tape5mOk(pc5, strategy.tape.min_price_change_5m)) {
     return { kind: "drop", reason: "tape_5m" };
   }
-  if (vis != null && !visitingOk(vis, params.attention.min_visiting_count)) {
+  if (vis == null || !Number.isFinite(vis)) {
+    return { kind: "skip", reason: "visiting_incomplete" };
+  }
+  if (!visitingOk(vis, strategy.attention.min_visiting_count)) {
     return { kind: "drop", reason: "visiting" };
   }
 
-  const minLiquidity = params.pass.min_liquidity_usd[entry.chain];
+  const minLiquidity = strategy.pass.min_liquidity_usd;
   if (minLiquidity > 0) {
     const liquidity = usableLiquidity(entry, now, params.cache.evidence_ttl_sec);
     if (liquidity == null) return { kind: "skip", reason: "liquidity_incomplete" };
     if (liquidity < minLiquidity) return { kind: "drop", reason: "liquidity" };
   }
 
-  const minMc = params.pass.min_entry_mc[entry.chain];
+  const minMc = strategy.pass.min_entry_mc;
   const needsMc =
     minMc > 0 ||
-    params.tape.min_volume_market_cap_ratio > 0 ||
-    params.tape.max_volume_market_cap_ratio > 0;
+    strategy.tape.min_volume_market_cap_ratio > 0 ||
+    strategy.tape.max_volume_market_cap_ratio > 0;
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
   if (needsMc) {
     if (mc == null) return { kind: "skip", reason: "entry_mc_incomplete" };
-    if (!tapeVolumeMarketCapOk(tape, mc, params.tape)) {
+    if (!tapeVolumeMarketCapOk(tape, mc, strategy.tape)) {
       return { kind: "drop", reason: "tape_volume_mc" };
     }
   }
@@ -219,8 +224,8 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
     }
   }
 
-  const smartMoneyConfirmed = sides.eligible >= params.flow.min_smart_wallets && net;
-  if (!params.flow.require_smart_money || smartMoneyConfirmed) {
+  const smartMoneyConfirmed = sides.eligible >= strategy.flow.min_smart_wallets && net;
+  if (!strategy.flow.require_smart_money || smartMoneyConfirmed) {
     return {
       kind: "pass",
       cluster: smartMoneyConfirmed,
@@ -233,10 +238,11 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
 }
 
 export function eligibleCount(entry: CacheEntry, params: Params, now: number): number {
+  const strategy = strategyFor(params, entry.chain);
   return lastSides(
     entry.trades,
     now,
     params.cache.evidence_ttl_sec,
-    params.flow.min_price_change_since_entry,
+    strategy.flow.min_price_change_since_entry,
   ).eligible;
 }
