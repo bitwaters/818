@@ -100,65 +100,159 @@ export function signalButton(signal: Signal): { text: string; url: string } {
 }
 
 export function renderMilestoneCard(
-  signal: { chain: Signal["chain"]; ca: string; symbol: string },
-  entryMc: number,
-  maxMc: number,
-  k: number,
-  step: number,
+  opts: {
+    signal: {
+      chain: Signal["chain"];
+      ca: string;
+      symbol: string;
+      ts: number;
+      rank1m: number | null;
+      rank5m: number | null;
+      visiting: number | null;
+    };
+    entryMc: number;
+    currentMc: number;
+    maxMc: number;
+    reachedTier: number;
+    crossedTiers: number[];
+    reachedAt: number;
+    timeZone: string;
+    gmgnUrl: string;
+  },
 ): string {
+  const { signal } = opts;
   const emoji = signal.chain === "sol" ? "🟣" : "🟡";
   const chain = signal.chain === "sol" ? "SOL" : "BSC";
-  const gainPct = k * step * 100;
-  const multiple = maxMc / entryMc;
-  return [
-    `🚀 ${emoji} ${chain}  ${ticker(signal)}  +${fmtNum(gainPct)}%`,
-    `<code>${escapeHtml(signal.ca)}</code>`,
-    `入场市值 $${fmtUsd(entryMc)} → 最高市值 $${fmtUsd(maxMc)}  (${fmtNum(multiple)}x)`,
-  ].join("\n");
+  const multiple = opts.maxMc / opts.entryMc;
+  const gainPct = (multiple - 1) * 100;
+  const elapsed = Math.max(0, opts.reachedAt - signal.ts);
+  const duration = elapsed < 3_600_000
+    ? `${Math.max(1, Math.round(elapsed / 60_000))}m`
+    : `${fmtNum(elapsed / 3_600_000)}h`;
+  const rank = joinParts([
+    signal.rank1m != null ? `1m #${signal.rank1m}` : undefined,
+    signal.rank5m != null ? `5m #${signal.rank5m}` : undefined,
+    signal.visiting != null ? `👁 浏览 ${signal.visiting}` : undefined,
+  ]);
+  const crossed = opts.crossedTiers.map((tier) => `${fmtNum(tier)}x`).join(" · ");
+  const linkedTicker = `<a href="${escapeHtml(opts.gmgnUrl)}"><b>${ticker(signal)}</b></a>`;
+  const lines = [
+    `🔥 ${emoji} <b>${chain}</b>  ${linkedTicker} 达到 <b>${fmtNum(opts.reachedTier)}x</b>`,
+    `信号后最高 <b>${fmtNum(multiple)}x</b>（${fmtPct(gainPct)}）`,
+    `入场 $${fmtUsd(opts.entryMc)}  ·  当前 $${fmtUsd(opts.currentMc)}  ·  最高 $${fmtUsd(opts.maxMc)}`,
+    `达到用时 ${duration}  ·  本次跨越 ${crossed}`,
+    `首次信号 ${dateTimeText(signal.ts, opts.timeZone)}`,
+  ];
+  if (rank) lines.push(rank);
+  lines.push(`<code>${escapeHtml(signal.ca)}</code>`);
+  return lines.join("\n");
+}
+
+export interface ReportToken {
+  id: number;
+  chain: Signal["chain"];
+  ca: string;
+  symbol: string;
+  entryMc: number;
+  peakMultiple: number | null;
+  currentMultiple: number | null;
+  gmgnUrl: string;
+}
+
+export interface PerformanceSummary {
+  n: number;
+  tracked: number;
+  hit: number;
+  hitMultiple: number;
+  medianPeak: number | null;
+  medianCurrent: number | null;
+  drawdown: number;
+  distribution: { x1_2: number; x1_5: number; x2: number };
+  all: ReportToken[];
+  top: ReportToken[];
+  bottom: ReportToken[];
+  omitted: number;
+}
+
+function dateTimeText(ts: number, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ts));
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+function multipleText(value: number | null): string {
+  return value == null ? "—" : `${fmtNum(value)}x`;
+}
+
+function renderTokenRow(token: ReportToken, index: number): string {
+  const emoji = token.chain === "sol" ? "🟣" : "🟡";
+  const name = token.symbol ? `$${escapeHtml(token.symbol)}` : `$${escapeHtml(token.ca.slice(0, 6))}`;
+  return `${index}. ${emoji} <a href="${escapeHtml(token.gmgnUrl)}"><b>${name}</b></a> · 信号后最高 ${multipleText(token.peakMultiple)} · 当前 ${multipleText(token.currentMultiple)} · 入场 $${fmtUsd(token.entryMc)}`;
+}
+
+function renderPerformanceReport(opts: {
+  title: string;
+  summary: PerformanceSummary;
+  fullList: boolean;
+}): string {
+  const s = opts.summary;
+  const hitRate = s.tracked === 0 ? null : (s.hit / s.tracked) * 100;
+  const drawdownRate = s.tracked === 0 ? null : (s.drawdown / s.tracked) * 100;
+  const lines = [
+    opts.title,
+    `信号 ${s.n}  ·  已跟踪 ${s.tracked}`,
+    `≥${fmtNum(s.hitMultiple)}x ${s.hit}  ·  命中率 ${hitRate == null ? "—" : `${fmtNum(hitRate)}%`}`,
+    `中位最高 ${multipleText(s.medianPeak)}  ·  中位当前 ${multipleText(s.medianCurrent)}`,
+    `跌破 0.8x ${s.drawdown}  ·  回撤率 ${drawdownRate == null ? "—" : `${fmtNum(drawdownRate)}%`}`,
+    `分布  ≥1.2x ${s.distribution.x1_2}  |  ≥1.5x ${s.distribution.x1_5}  |  ≥2x ${s.distribution.x2}`,
+  ];
+
+  if (opts.fullList) {
+    lines.push("", "📋 <b>全部信号</b>");
+    s.all.forEach((token, index) => lines.push(renderTokenRow(token, index + 1)));
+  } else {
+    if (s.top.length > 0) {
+      lines.push("", "🏆 <b>信号后最高 Top</b>");
+      s.top.forEach((token, index) => lines.push(renderTokenRow(token, index + 1)));
+    }
+    if (s.bottom.length > 0) {
+      lines.push("", "📉 <b>当前表现 Bottom</b>");
+      s.bottom.forEach((token, index) => lines.push(renderTokenRow(token, index + 1)));
+    }
+    if (s.omitted > 0) lines.push(`其余 ${s.omitted} 个信号未展开`);
+  }
+  return lines.join("\n");
 }
 
 export function renderHourlySummary(opts: {
   hourLabel: string;
-  n: number;
-  hit: number;
-  hitMultiple: number;
-  top?: { multiple: number; symbol: string };
+  summary: PerformanceSummary;
 }): string {
-  const hitPct = (opts.hitMultiple - 1) * 100;
-  const pct = opts.n === 0 ? 0 : (opts.hit / opts.n) * 100;
-  const lines = [
-    `📊 小时汇总  ${opts.hourLabel}`,
-    `今日入库 ${opts.n}`,
-    `命中(≥${fmtNum(hitPct)}%) ${opts.hit}`,
-    `命中率 ${fmtNum(pct)}%`,
-  ];
-  if (opts.top) {
-    const name = opts.top.symbol ? `$${escapeHtml(opts.top.symbol)}` : "";
-    lines.push(`最高 ${fmtNum(opts.top.multiple)}x  ${name}`.trimEnd());
-  }
-  return lines.join("\n");
+  return renderPerformanceReport({
+    title: `📊 <b>小时战报</b>｜${escapeHtml(opts.hourLabel)}`,
+    summary: opts.summary,
+    fullList: opts.summary.n <= 10,
+  });
 }
 
 export function renderDailySummary(opts: {
   dateLabel: string;
-  n: number;
-  hit: number;
-  hitMultiple: number;
-  top?: { multiple: number; symbol: string };
+  summary: PerformanceSummary;
 }): string {
-  const hitPct = (opts.hitMultiple - 1) * 100;
-  const pct = opts.n === 0 ? 0 : (opts.hit / opts.n) * 100;
-  const lines = [
-    `📊 日汇总  ${opts.dateLabel}`,
-    `入库 ${opts.n}`,
-    `命中(≥${fmtNum(hitPct)}%) ${opts.hit}`,
-    `命中率 ${fmtNum(pct)}%`,
-  ];
-  if (opts.top) {
-    const name = opts.top.symbol ? `$${escapeHtml(opts.top.symbol)}` : "";
-    lines.push(`最高 ${fmtNum(opts.top.multiple)}x  ${name}`.trimEnd());
-  }
-  return lines.join("\n");
+  return renderPerformanceReport({
+    title: `📊 <b>日报</b>｜${escapeHtml(opts.dateLabel)}`,
+    summary: opts.summary,
+    fullList: false,
+  });
 }
 
 export function hitPct(params: Params): number {

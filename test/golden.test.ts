@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import Database from "better-sqlite3";
 import { cacheKey, normalizeCa } from "../src/cache.ts";
 import { renderSignalCard } from "../src/push/cards.ts";
-import { impliedMc, milestoneK, runSnapshot, sendDailySummary, sendHourlySummary, StatsStore, tokenInfoMarketCap } from "../src/stats.ts";
+import { impliedMc, reachedMilestoneCount, runSnapshot, sendDailySummary, sendHourlySummary, StatsStore, tokenInfoMarketCap } from "../src/stats.ts";
+import { previousCompleteHourWindow } from "../src/time.ts";
 import {
   BSC_CA,
   BSC_CA_MIXED,
@@ -22,6 +23,31 @@ import {
 
 function memoryStore(params: Parameters<typeof StatsStore>[0], logger: Parameters<typeof StatsStore>[1]) {
   return new StatsStore(params, logger, new Database(":memory:"));
+}
+
+function insertStatSignal(store: StatsStore, ts: number, index: number, symbol = `T${index}`) {
+  const ca = `0x${index.toString(16).padStart(40, "0")}`;
+  assert.equal(
+    store.insert({
+      chain: "bsc",
+      ca,
+      symbol,
+      ts,
+      evidence: {
+        smart_wallets: 0,
+        price_change_1m: 1,
+        buys: 1,
+        sells: 0,
+        volume: 1,
+        swaps: 1,
+        market_cap: 100,
+      },
+      l0: {},
+      links: { gmgn: `https://gmgn.ai/bsc/token/${ca}` },
+    }),
+    true,
+  );
+  return store.activeRows(ts).find((row) => row.ca === ca)!;
 }
 
 describe("金样例 1–11 L0/过线", () => {
@@ -397,14 +423,15 @@ describe("金样例 21b、23–32 统计", () => {
   });
 
   it("23 / 23b / 24 命中与涨幅档", () => {
-    assert.equal(milestoneK(1.4, 1), 0);
-    assert.equal(milestoneK(1.9, 1), 0);
-    assert.equal(milestoneK(2.0, 1), 1);
+    const tiers = [1.5, 2, 3, 5, 10];
+    assert.equal(reachedMilestoneCount(1.4, tiers), 0);
+    assert.equal(reachedMilestoneCount(1.9, tiers), 1);
+    assert.equal(reachedMilestoneCount(3.1, tiers), 3);
     assert.ok(1.4 < 1.5);
     assert.ok(1.9 >= 1.5);
   });
 
-  it("24 2.0x 提醒成功写 last_milestone=1", async () => {
+  it("24 2.0x 提醒成功写 last_milestone=2", async () => {
     const params = testParams((p) => {
       p.stats.sqlite_path = ":memory:";
     });
@@ -430,12 +457,14 @@ describe("金样例 21b、23–32 统计", () => {
     });
     const row = store.activeRows(h.now)[0]!;
     assert.equal(row.max_mc, 200);
-    assert.equal(row.last_milestone, 1);
+    assert.equal(row.last_milestone, 2);
+    assert.match(h.telegram.texts[0] ?? "", /达到 <b>2x<\/b>/);
+    assert.match(h.telegram.texts[0] ?? "", /本次跨越 1.5x · 2x/);
     assert.match(h.telegram.texts[0] ?? "", /\+100%/);
     store.close();
   });
 
-  it("24b 提醒发送失败不改档", async () => {
+  it("24b 提醒发送失败不改档，未创新高时仍重试", async () => {
     const params = testParams((p) => {
       p.stats.sqlite_path = ":memory:";
     });
@@ -461,10 +490,21 @@ describe("金样例 21b、23–32 统计", () => {
       now: h.now + 60_000,
     });
     assert.equal(store.activeRows(h.now)[0]!.last_milestone, 0);
+    seed(h, "sol", SOL_CA, { marketCap: 190, marketCapAt: h.now + 120_000 });
+    await runSnapshot({
+      store,
+      params,
+      cache: h.cache,
+      telegram: h.telegram,
+      fetchInfoMc: async () => null,
+      now: h.now + 120_000,
+    });
+    assert.equal(h.telegram.texts.length, 1);
+    assert.equal(store.activeRows(h.now)[0]!.last_milestone, 2);
     store.close();
   });
 
-  it("25 1.8x 跳到 3.1x 只发 +200%", async () => {
+  it("25 1.4x 跳到 3.1x 只发达到 3x", async () => {
     const params = testParams((p) => {
       p.stats.sqlite_path = ":memory:";
     });
@@ -479,7 +519,7 @@ describe("金样例 21b、23–32 统计", () => {
       l0: {},
       links: { gmgn: "https://x" },
     });
-    seed(h, "sol", SOL_CA, { marketCap: 180, marketCapAt: h.now });
+    seed(h, "sol", SOL_CA, { marketCap: 140, marketCapAt: h.now });
     await runSnapshot({
       store,
       params,
@@ -498,9 +538,10 @@ describe("金样例 21b、23–32 统计", () => {
       now: h.now + 60_000,
     });
     assert.equal(h.telegram.texts.length, 1);
-    assert.match(h.telegram.texts[0] ?? "", /\+200%/);
-    assert.doesNotMatch(h.telegram.texts[0] ?? "", /\+100%/);
-    assert.equal(store.activeRows(h.now)[0]!.last_milestone, 2);
+    assert.match(h.telegram.texts[0] ?? "", /达到 <b>3x<\/b>/);
+    assert.match(h.telegram.texts[0] ?? "", /本次跨越 1.5x · 2x · 3x/);
+    assert.match(h.telegram.texts[0] ?? "", /信号后最高 <b>3.1x<\/b>/);
+    assert.equal(store.activeRows(h.now)[0]!.last_milestone, 3);
     store.close();
   });
 
@@ -533,6 +574,116 @@ describe("金样例 21b、23–32 统计", () => {
     });
     const sent = await sendDailySummary({ store, params, telegram: h.telegram, now: h.now });
     assert.equal(sent, false);
+    store.close();
+  });
+
+  it("26c 小时报只统计上一个完整自然小时的半开窗口", async () => {
+    const params = testParams((p) => {
+      p.stats.sqlite_path = ":memory:";
+      p.stats.timezone = "Asia/Shanghai";
+    });
+    const h = makeHarness({ params });
+    const store = memoryStore(params, h.logger);
+    const reportAt = Date.parse("2026-08-20T07:00:05.000Z"); // 上海 15:00:05
+    const window = previousCompleteHourWindow(reportAt, params.stats.timezone);
+    assert.equal(window.start, Date.parse("2026-08-20T06:00:00.000Z"));
+    assert.equal(window.end, Date.parse("2026-08-20T07:00:00.000Z"));
+    insertStatSignal(store, window.start - 1, 101, "BEFORE");
+    insertStatSignal(store, window.start, 102, "AT_START");
+    insertStatSignal(store, window.end - 1, 103, "AT_END");
+    insertStatSignal(store, window.end, 104, "NEXT_HOUR");
+
+    const sent = await sendHourlySummary({ store, params, telegram: h.telegram, now: reportAt });
+    assert.equal(sent, true);
+    const card = h.telegram.texts[0] ?? "";
+    assert.match(card, /2026-08-20 14:00–14:59/);
+    assert.match(card, /AT_START/);
+    assert.match(card, /AT_END/);
+    assert.doesNotMatch(card, /BEFORE/);
+    assert.doesNotMatch(card, /NEXT_HOUR/);
+    assert.match(card, /信号 2  ·  已跟踪 0/);
+    assert.match(card, /命中率 —/);
+    store.close();
+  });
+
+  it("26d 小时报按已跟踪样本计算命中、中位数与回撤", async () => {
+    const params = testParams((p) => {
+      p.stats.sqlite_path = ":memory:";
+      p.stats.timezone = "Asia/Shanghai";
+    });
+    const h = makeHarness({ params });
+    const store = memoryStore(params, h.logger);
+    const reportAt = Date.parse("2026-08-20T07:00:00.000Z");
+    const tracked = insertStatSignal(store, reportAt - 30 * 60_000, 105, "GAINER");
+    insertStatSignal(store, reportAt - 20 * 60_000, 106, "WAITING");
+    store.recordObservation(tracked, 200, reportAt - 10_000);
+    const refreshed = store.activeRows(reportAt)[0]!;
+    store.recordObservation(refreshed, 70, reportAt - 5_000);
+
+    await sendHourlySummary({ store, params, telegram: h.telegram, now: reportAt });
+    const card = h.telegram.texts[0] ?? "";
+    assert.match(card, /信号 2  ·  已跟踪 1/);
+    assert.match(card, /≥1.5x 1  ·  命中率 100%/);
+    assert.match(card, /中位最高 2x  ·  中位当前 0.7x/);
+    assert.match(card, /跌破 0.8x 1  ·  回撤率 100%/);
+    assert.match(card, /GAINER/);
+    assert.match(card, /WAITING/);
+    assert.match(card, /href="https:\/\/gmgn.ai\/bsc\/token\//);
+    store.close();
+  });
+
+  it("26e 小时报超过 10 个时展示 Top5、非重复 Bottom3 与其余数量", async () => {
+    const params = testParams((p) => {
+      p.stats.sqlite_path = ":memory:";
+      p.stats.timezone = "Asia/Shanghai";
+    });
+    const h = makeHarness({ params });
+    const store = memoryStore(params, h.logger);
+    const reportAt = Date.parse("2026-08-20T07:00:00.000Z");
+    for (let i = 0; i < 12; i += 1) {
+      const row = insertStatSignal(store, reportAt - (i + 1) * 60_000, 200 + i, `RANK_${i}`);
+      store.recordObservation(row, 100 + i * 10, reportAt - 1_000);
+    }
+
+    await sendHourlySummary({ store, params, telegram: h.telegram, now: reportAt });
+    const card = h.telegram.texts[0] ?? "";
+    assert.match(card, /信号后最高 Top/);
+    assert.match(card, /当前表现 Bottom/);
+    assert.match(card, /其余 4 个信号未展开/);
+    assert.equal((card.match(/RANK_/g) ?? []).length, 8);
+    assert.ok(card.length < 4096);
+    store.close();
+  });
+
+  it("26f 日报只统计前一自然日并展示 Top10、Bottom5", async () => {
+    const params = testParams((p) => {
+      p.stats.sqlite_path = ":memory:";
+      p.stats.timezone = "Asia/Shanghai";
+    });
+    const h = makeHarness({ params });
+    const store = memoryStore(params, h.logger);
+    const reportAt = Date.parse("2026-08-19T16:00:02.000Z"); // 上海 8 月 20 日零点
+    for (let i = 0; i < 16; i += 1) {
+      const row = insertStatSignal(
+        store,
+        Date.parse("2026-08-18T16:00:00.000Z") + i * 60_000,
+        300 + i,
+        i === 0 ? "<BAD&" : `DAY_${i}`,
+      );
+      store.recordObservation(row, 100 + i * 10, reportAt - 1_000);
+    }
+    insertStatSignal(store, Date.parse("2026-08-19T16:00:00.000Z"), 399, "TODAY");
+
+    await sendDailySummary({ store, params, telegram: h.telegram, now: reportAt });
+    const card = h.telegram.texts[0] ?? "";
+    assert.match(card, /日报<\/b>｜2026-08-19/);
+    assert.match(card, /信号 16  ·  已跟踪 16/);
+    assert.match(card, /信号后最高 Top/);
+    assert.match(card, /当前表现 Bottom/);
+    assert.match(card, /其余 1 个信号未展开/);
+    assert.match(card, /&lt;BAD&amp;/);
+    assert.doesNotMatch(card, /TODAY/);
+    assert.ok(card.length < 4096);
     store.close();
   });
 

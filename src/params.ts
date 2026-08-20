@@ -51,6 +51,21 @@ const chainStrategySchema = z.object({
   }),
 });
 
+const milestoneMultiplesSchema = z
+  .array(z.number().gt(1))
+  .min(1)
+  .superRefine((values, ctx) => {
+    for (let i = 1; i < values.length; i += 1) {
+      if ((values[i] ?? 0) <= (values[i - 1] ?? 0)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "milestone_multiples must be strictly increasing",
+          path: [i],
+        });
+      }
+    }
+  });
+
 const ParamsSchema = z.object({
   rules: z
     .object({
@@ -138,7 +153,7 @@ const ParamsSchema = z.object({
     snapshot_sec: z.number().positive(),
     track_hours: z.number().positive(),
     hit_multiple: z.number().positive(),
-    milestone_step: z.number().positive(),
+    milestone_multiples: milestoneMultiplesSchema.default([1.5, 2, 3, 5, 10, 20, 50, 100]),
     timezone: z.string().min(1),
   }),
   /** 缺整个 trace 或个别键时用默认值，避免旧 yaml 把进程打挂；默认关闭轨迹。 */

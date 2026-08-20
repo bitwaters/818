@@ -68,3 +68,20 @@ export function hourLabel(ts: number, timeZone: string): string {
   const p = zonedParts(ts, timeZone);
   return `${String(p.hour).padStart(2, "0")}:00`;
 }
+
+export interface TimeWindow {
+  start: number;
+  end: number;
+  label: string;
+}
+
+export function previousCompleteHourWindow(now: number, timeZone: string): TimeWindow {
+  const p = zonedParts(now, timeZone);
+  const elapsed = (p.minute * 60 + p.second) * 1000 + (now % 1000);
+  const end = now - elapsed;
+  const start = end - 3_600_000;
+  const startParts = zonedParts(start, timeZone);
+  const date = dateKey(start, timeZone);
+  const hour = String(startParts.hour).padStart(2, "0");
+  return { start, end, label: `${date} ${hour}:00–${hour}:59` };
+}

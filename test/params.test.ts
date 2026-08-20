@@ -41,7 +41,18 @@ describe("参数与发送开关", () => {
     assert.equal(params.strategy.bsc.tape.max_buy_sell_ratio, 3);
     assert.equal(params.quota.on_429, "read_reset");
     assert.equal(params.stats.timezone, "Asia/Shanghai");
+    assert.deepEqual(params.stats.milestone_multiples, [1.5, 2, 3, 5, 10, 20, 50, 100]);
     assert.equal(params.trace.enabled, true);
+  });
+
+  it("倍数提醒阶梯必须严格递增且大于 1", () => {
+    const raw = parse(readFileSync(resolve(process.cwd(), "params.yaml"), "utf8")) as {
+      stats: { milestone_multiples: number[] };
+    };
+    raw.stats.milestone_multiples = [1.5, 2, 2];
+    assert.throws(() => parseParams(raw), /strictly increasing/);
+    raw.stats.milestone_multiples = [1, 2, 3];
+    assert.throws(() => parseParams(raw));
   });
 
   it("缺 trace 整段时用默认关闭轨迹，不抛错", () => {

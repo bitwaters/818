@@ -2,10 +2,16 @@ import type Database from "better-sqlite3";
 import { TokenCache, usableMarketCap } from "./cache.js";
 import type { Logger } from "./logger.js";
 import type { Params } from "./params.js";
-import { renderDailySummary, renderHourlySummary, renderMilestoneCard } from "./push/cards.js";
+import {
+  renderDailySummary,
+  renderHourlySummary,
+  renderMilestoneCard,
+  type PerformanceSummary,
+  type ReportToken,
+} from "./push/cards.js";
 import type { TelegramSender } from "./push/telegram.js";
 import { SnapshotQuota } from "./quota.js";
-import { dateKey, hourLabel, shiftDateKey } from "./time.js";
+import { dateKey, previousCompleteHourWindow, shiftDateKey } from "./time.js";
 import type { Chain, PassKind, Signal } from "./types.js";
 
 export interface SignalRow {
@@ -17,6 +23,7 @@ export interface SignalRow {
   entry_mc: number;
   max_mc: number;
   last_milestone: number;
+  milestone_config: string;
   calib_mc: number | null;
   pass_kind: PassKind | null;
   eligible: number | null;
@@ -99,6 +106,7 @@ const REPLAY_COLUMNS: Array<[string, string]> = [
   ["mc_10m", "REAL"],
   ["mc_30m", "REAL"],
   ["mc_1h", "REAL"],
+  ["milestone_config", "TEXT NOT NULL DEFAULT ''"],
 ];
 
 function ensureReplayColumns(db: Database.Database): void {
@@ -111,13 +119,37 @@ function ensureReplayColumns(db: Database.Database): void {
   }
 }
 
+function migrateMilestoneConfig(db: Database.Database, tiers: number[]): number {
+  const config = JSON.stringify(tiers);
+  const rows = db
+    .prepare(
+      `SELECT id, entry_mc, max_mc FROM signals
+       WHERE milestone_config IS NULL OR milestone_config != ?`,
+    )
+    .all(config) as Array<{ id: number; entry_mc: number; max_mc: number }>;
+  if (rows.length === 0) return 0;
+  const update = db.prepare(
+    `UPDATE signals SET last_milestone = ?, milestone_config = ? WHERE id = ?`,
+  );
+  db.transaction(() => {
+    for (const row of rows) {
+      update.run(reachedMilestoneCount(row.max_mc / row.entry_mc, tiers), config, row.id);
+    }
+  })();
+  return rows.length;
+}
+
 export function impliedMc(entryMc: number, infoMc: number, calibMc: number): number {
   return entryMc * (infoMc / calibMc);
 }
 
-export function milestoneK(multiple: number, step: number): number {
-  if (step <= 0 || multiple < 1 + step) return 0;
-  return Math.floor((multiple - 1) / step);
+export function reachedMilestoneCount(multiple: number, tiers: number[]): number {
+  let count = 0;
+  for (const tier of tiers) {
+    if (multiple < tier) break;
+    count += 1;
+  }
+  return count;
 }
 
 export function snapshotDelayMs(signalTs: number, now: number): number {
@@ -158,11 +190,19 @@ export class StatsStore {
         entry_mc REAL NOT NULL,
         max_mc REAL NOT NULL,
         last_milestone INTEGER NOT NULL DEFAULT 0,
+        milestone_config TEXT NOT NULL DEFAULT '',
         calib_mc REAL
       )
     `);
     ensureReplayColumns(this.db);
-    this.logger.info({ replay: REPLAY_COLUMNS.map(([name]) => name) }, "signals replay columns ready");
+    const migratedMilestones = migrateMilestoneConfig(
+      this.db,
+      this.params.stats.milestone_multiples,
+    );
+    this.logger.info(
+      { replay: REPLAY_COLUMNS.map(([name]) => name), migratedMilestones },
+      "signals replay columns ready",
+    );
   }
 
   hasRow(chain: Chain, ca: string): boolean {
@@ -180,14 +220,14 @@ export class StatsStore {
     this.db
       .prepare(
         `INSERT INTO signals (
-           chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, calib_mc,
+           chain, ca, symbol, ts, entry_mc, max_mc, last_milestone, milestone_config, calib_mc,
            pass_kind, eligible, eligible_strict, buy_wallets, sell_wallets,
            buy_usd, sell_usd, visiting, volume, swaps, buys, sells, pc_1m, pc_5m, liquidity,
            l0_json, rule_version, has_usd, hot_pool_lane, momentum_tier, rank_1m, rank_5m,
            rank_1m_seen_at, rank_5m_seen_at, created_at,
            current_mc, min_mc, next_snapshot_at
          ) VALUES (
-           @chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, NULL,
+           @chain, @ca, @symbol, @ts, @entry_mc, @max_mc, 0, @milestone_config, NULL,
            @pass_kind, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
            @buy_usd, @sell_usd, @visiting, @volume, @swaps, @buys, @sells, @pc_1m, @pc_5m,
            @liquidity, @l0_json, @rule_version, @has_usd, @hot_pool_lane, @momentum_tier,
@@ -202,6 +242,7 @@ export class StatsStore {
         ts: signal.ts,
         entry_mc: mc,
         max_mc: mc,
+        milestone_config: JSON.stringify(this.params.stats.milestone_multiples),
         pass_kind: ev.pass_kind ?? null,
         eligible: ev.smart_wallets,
         eligible_strict: ev.eligible_strict,
@@ -270,6 +311,16 @@ export class StatsStore {
       .all(this.params.rules.version) as SignalRow[];
     const set = new Set(keys);
     return all.filter((row) => set.has(dateKey(row.ts, timeZone)));
+  }
+
+  rowsInRange(start: number, end: number): SignalRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM signals
+         WHERE rule_version = ? AND ts >= ? AND ts < ?
+         ORDER BY ts ASC`,
+      )
+      .all(this.params.rules.version, start, end) as SignalRow[];
   }
 
   markCalibrated(row: SignalRow, calibMc: number, now: number): void {
@@ -415,34 +466,114 @@ export async function runSnapshot(opts: {
       continue;
     }
     const observation = opts.store.recordObservation(row, observed, opts.now);
-    if (!observation.maxIncreased) continue;
-    updated += 1;
+    if (observation.maxIncreased) updated += 1;
     const multiple = observation.maxMc / row.entry_mc;
-    const k = milestoneK(multiple, opts.params.stats.milestone_step);
-    if (k > row.last_milestone) {
-      const html = renderMilestoneCard(
-        { chain: row.chain, ca: row.ca, symbol: row.symbol },
-        row.entry_mc,
-        observation.maxMc,
-        k,
-        opts.params.stats.milestone_step,
-      );
+    const tiers = opts.params.stats.milestone_multiples;
+    const reachedCount = reachedMilestoneCount(multiple, tiers);
+    if (reachedCount > row.last_milestone) {
+      const reachedTier = tiers[reachedCount - 1];
+      if (reachedTier == null) continue;
+      const html = renderMilestoneCard({
+        signal: {
+          chain: row.chain,
+          ca: row.ca,
+          symbol: row.symbol,
+          ts: row.ts,
+          rank1m: row.rank_1m,
+          rank5m: row.rank_5m,
+          visiting: row.visiting,
+        },
+        entryMc: row.entry_mc,
+        currentMc: observed,
+        maxMc: observation.maxMc,
+        reachedTier,
+        crossedTiers: tiers.slice(row.last_milestone, reachedCount),
+        reachedAt: opts.now,
+        timeZone: opts.params.stats.timezone,
+        gmgnUrl: gmgnUrl(opts.params, row),
+      });
       const sent = await opts.telegram.sendText(html);
-      if (sent) opts.store.updateMilestone(row.id, k);
+      if (sent) opts.store.updateMilestone(row.id, reachedCount);
     }
   }
   return { missed, updated };
 }
 
-function summarize(rows: SignalRow[], hitMultiple: number) {
-  let hit = 0;
-  let top: { multiple: number; symbol: string } | undefined;
-  for (const row of rows) {
-    const multiple = row.max_mc / row.entry_mc;
-    if (multiple >= hitMultiple) hit += 1;
-    if (!top || multiple > top.multiple) top = { multiple, symbol: row.symbol };
-  }
-  return { n: rows.length, hit, top };
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle] ?? null;
+  return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
+}
+
+function gmgnUrl(params: Params, row: Pick<SignalRow, "chain" | "ca">): string {
+  return params.push.gmgn_token_url[row.chain].replace("{ca}", encodeURIComponent(row.ca));
+}
+
+function reportToken(row: SignalRow, params: Params): ReportToken {
+  const tracked = row.last_snapshot_at != null;
+  return {
+    id: row.id,
+    chain: row.chain,
+    ca: row.ca,
+    symbol: row.symbol,
+    entryMc: row.entry_mc,
+    peakMultiple: tracked ? row.max_mc / row.entry_mc : null,
+    currentMultiple: tracked && row.current_mc != null ? row.current_mc / row.entry_mc : null,
+    gmgnUrl: gmgnUrl(params, row),
+  };
+}
+
+function byPeakDesc(a: ReportToken, b: ReportToken): number {
+  return (b.peakMultiple ?? Number.NEGATIVE_INFINITY) -
+    (a.peakMultiple ?? Number.NEGATIVE_INFINITY) || a.id - b.id;
+}
+
+function byCurrentAsc(a: ReportToken, b: ReportToken): number {
+  return (a.currentMultiple ?? Number.POSITIVE_INFINITY) -
+    (b.currentMultiple ?? Number.POSITIVE_INFINITY) || a.id - b.id;
+}
+
+export function summarizePerformance(
+  rows: SignalRow[],
+  params: Params,
+  topLimit: number,
+  bottomLimit: number,
+): PerformanceSummary {
+  const trackedRows = rows.filter((row) => row.last_snapshot_at != null);
+  const peaks = trackedRows.map((row) => row.max_mc / row.entry_mc);
+  const currents = trackedRows.map((row) => (row.current_mc ?? row.entry_mc) / row.entry_mc);
+  const hitMultiple = params.stats.hit_multiple;
+  const tokens = rows.map((row) => reportToken(row, params));
+  const ranked = tokens.filter((token) => token.peakMultiple != null).sort(byPeakDesc);
+  const top = ranked.slice(0, topLimit);
+  const topIds = new Set(top.map((token) => token.id));
+  const bottom = tokens
+    .filter((token) => token.currentMultiple != null && !topIds.has(token.id))
+    .sort(byCurrentAsc)
+    .slice(0, bottomLimit);
+  const shownIds = new Set([...top, ...bottom].map((token) => token.id));
+  return {
+    n: rows.length,
+    tracked: trackedRows.length,
+    hit: peaks.filter((multiple) => multiple >= hitMultiple).length,
+    hitMultiple,
+    medianPeak: median(peaks),
+    medianCurrent: median(currents),
+    drawdown: trackedRows.filter(
+      (row) => (row.min_mc ?? row.entry_mc) / row.entry_mc <= 0.8,
+    ).length,
+    distribution: {
+      x1_2: peaks.filter((multiple) => multiple >= 1.2).length,
+      x1_5: peaks.filter((multiple) => multiple >= 1.5).length,
+      x2: peaks.filter((multiple) => multiple >= 2).length,
+    },
+    all: tokens.sort(byPeakDesc),
+    top,
+    bottom,
+    omitted: Math.max(0, rows.length - shownIds.size),
+  };
 }
 
 export async function sendHourlySummary(opts: {
@@ -452,16 +583,12 @@ export async function sendHourlySummary(opts: {
   now: number;
 }): Promise<boolean> {
   const tz = opts.params.stats.timezone;
-  const today = dateKey(opts.now, tz);
-  const rows = opts.store.rowsInDateKeys([today], tz);
+  const window = previousCompleteHourWindow(opts.now, tz);
+  const rows = opts.store.rowsInRange(window.start, window.end);
   if (rows.length === 0) return false;
-  const { n, hit, top } = summarize(rows, opts.params.stats.hit_multiple);
   const html = renderHourlySummary({
-    hourLabel: hourLabel(opts.now, tz),
-    n,
-    hit,
-    hitMultiple: opts.params.stats.hit_multiple,
-    top,
+    hourLabel: window.label,
+    summary: summarizePerformance(rows, opts.params, 5, 3),
   });
   return opts.telegram.sendText(html);
 }
@@ -476,13 +603,9 @@ export async function sendDailySummary(opts: {
   const yesterday = shiftDateKey(dateKey(opts.now, tz), -1);
   const rows = opts.store.rowsInDateKeys([yesterday], tz);
   if (rows.length === 0) return false;
-  const { n, hit, top } = summarize(rows, opts.params.stats.hit_multiple);
   const html = renderDailySummary({
     dateLabel: yesterday,
-    n,
-    hit,
-    hitMultiple: opts.params.stats.hit_multiple,
-    top,
+    summary: summarizePerformance(rows, opts.params, 10, 5),
   });
   return opts.telegram.sendText(html);
 }

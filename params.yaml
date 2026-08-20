@@ -135,7 +135,7 @@ stats:
   snapshot_sec: 60
   track_hours: 24
   hit_multiple: 1.5
-  milestone_step: 1.0
+  milestone_multiples: [1.5, 2, 3, 5, 10, 20, 50, 100]
   timezone: "Asia/Shanghai"
 
 trace:

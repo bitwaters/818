@@ -121,7 +121,8 @@ test("legacy signals schema upgrades without destructive migration", () => {
       last_milestone INTEGER NOT NULL DEFAULT 0,
       calib_mc REAL
     );
-    INSERT INTO signals (chain, ca, ts, entry_mc, max_mc) VALUES ('bsc', 'old', 1, 10, 10);
+    INSERT INTO signals (chain, ca, ts, entry_mc, max_mc, last_milestone)
+    VALUES ('bsc', 'old', 1, 10, 31, 2);
   `);
   const params = testParams();
   new StatsStore(params, pino({ level: "silent" }), db);
@@ -131,6 +132,17 @@ test("legacy signals schema upgrades without destructive migration", () => {
   assert.equal(cols.has("rule_version"), true);
   assert.equal(cols.has("current_mc"), true);
   assert.equal(cols.has("drop_20_at"), true);
+  assert.equal(cols.has("milestone_config"), true);
+  assert.equal(
+    (db.prepare(`SELECT milestone_config FROM signals`).get() as { milestone_config: string })
+      .milestone_config,
+    JSON.stringify(params.stats.milestone_multiples),
+  );
+  assert.equal(
+    (db.prepare(`SELECT last_milestone FROM signals`).get() as { last_milestone: number })
+      .last_milestone,
+    3,
+  );
   assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM signals`).get() as { n: number }).n, 1);
   db.close();
 });
