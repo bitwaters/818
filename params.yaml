@@ -100,7 +100,7 @@ stats:
 
 trace:
   enabled: true
-  min_gap_ms: 5000
+  min_gap_ms: 15000
   mc_change_pct: 0.02
   watch_min_sec: 21600
   watch_idle_sec: 7200

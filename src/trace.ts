@@ -112,7 +112,8 @@ export function shouldWriteTick(opts: {
   now: number;
   minGapMs: number;
 }): boolean {
-  if (opts.interesting) return true;
+  // interesting 只延长 watch 活跃期，不再绕过采样下限；秒级重复快照对 10m 回放无价值。
+  if (opts.lastTickAt === 0) return true;
   return opts.now - opts.lastTickAt >= opts.minGapMs;
 }
 
