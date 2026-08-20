@@ -100,16 +100,14 @@ export class Pipeline {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.locks.set(
-      key,
-      prev.then(() => gate),
-    );
+    const current = prev.then(() => gate);
+    this.locks.set(key, current);
     await prev;
     try {
       return await fn();
     } finally {
       release();
-      if (this.locks.get(key) === gate) this.locks.delete(key);
+      if (this.locks.get(key) === current) this.locks.delete(key);
     }
   }
 
@@ -127,6 +125,14 @@ export class Pipeline {
     }
     const cool = this.cooldownUntil.get(key);
     if (cool != null && now < cool) return { decision: "skip", reason: "cooldown" };
+
+    // 先跑无需额外 API 的盘口/资金流条件，避免不可能过线的币耗尽 security 配额。
+    const prePass = evaluatePass(entry, params, now);
+    if (prePass.kind === "skip") return { decision: "skip", reason: prePass.reason };
+    if (prePass.kind === "drop") {
+      quota.removeSkipped(chain, entry.ca);
+      return { decision: "drop", reason: prePass.reason };
+    }
 
     const l0 = checkL0(entry, params, now);
     if (l0.kind === "incomplete") {

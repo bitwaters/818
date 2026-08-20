@@ -123,20 +123,6 @@ export async function pollTrending(opts: {
     { chain: opts.chain, interval: "1m", rows: rows.length, written, visiting: visitingN },
     "trending visiting coverage",
   );
-  // #region agent log
-  fetch("http://127.0.0.1:7878/ingest/8c69d535-940b-4345-8c6a-a5c24d5224c8", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f281b7" },
-    body: JSON.stringify({
-      sessionId: "f281b7",
-      hypothesisId: "A",
-      location: "trending.ts:pollTrending1m",
-      message: "1m rank visiting coverage",
-      data: { chain: opts.chain, rows: rows.length, written, visiting: visitingN },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => undefined);
-  // #endregion
 }
 
 export function startTrending(opts: {

@@ -39,6 +39,8 @@ export function buildSignal(
       eligible_strict: sides.eligible_strict,
       buy_wallets: sides.buyWallets,
       sell_wallets: sides.sellWallets,
+      buy_usd: sides.buyUsd,
+      sell_usd: sides.sellUsd,
       ...(kind ? { pass_kind: kind } : {}),
       ...(tape.price_change_1m != null ? { price_change_1m: tape.price_change_1m } : {}),
       ...(pc5 != null ? { price_change_5m: pc5 } : {}),

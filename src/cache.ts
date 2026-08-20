@@ -140,9 +140,17 @@ export class TokenCache {
   ): CacheEntry | null {
     const entry = this.upsert(chain, rawCa);
     if (!entry) return null;
-    entry.trades.push(...trades);
+    const known = new Set(entry.trades.flatMap((trade) => (trade.id ? [trade.id] : [])));
+    const added: SmartTrade[] = [];
+    for (const trade of trades) {
+      if (trade.id && known.has(trade.id)) continue;
+      if (trade.id) known.add(trade.id);
+      added.push(trade);
+    }
+    const before = entry.trades.length;
+    entry.trades.push(...added);
     if (window) entry.trades = tradesInWindow(entry.trades, window.now, window.ttlSec);
-    this.emitMutate(entry);
+    if (added.length > 0 || entry.trades.length !== before) this.emitMutate(entry);
     return entry;
   }
 

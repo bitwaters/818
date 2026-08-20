@@ -19,6 +19,24 @@ export const L0_SNAPSHOT_KEYS = [
   "lp_lock_percent",
   "buy_tax",
   "sell_tax",
+  // 先完整留存高价值候选字段，待真实样本足够后再决定硬阈值。
+  "holder_count",
+  "sniper_count",
+  "top70_sniper_hold_rate",
+  "dev_team_hold_rate",
+  "creator_close",
+  "creator_token_status",
+  "bot_degen_rate",
+  "smart_degen_count",
+  "renowned_count",
+  "entrapment_ratio",
+  "initial_liquidity",
+  "creation_timestamp",
+  "open_timestamp",
+  "launchpad",
+  "bluechip_owner_percentage",
+  "burn_ratio",
+  "burn_status",
 ] as const;
 
 export function pickL0Snapshot(row: Record<string, unknown>): Record<string, unknown> {
@@ -63,9 +81,11 @@ export function parseTrade(row: Record<string, unknown>, now: number): SmartTrad
   const priceChange = numField(row, "price_change");
   const amountUsd = numField(row, "amount_usd", "cost_usd");
   const openOrClose = numField(row, "is_open_or_close");
+  const id = strField(row, "transaction_hash", "tx_hash");
   if (!wallet || !side) return null;
   const ts = numField(row, "timestamp", "ts", "time", "created_at") ?? now;
   return {
+    ...(id ? { id } : {}),
     wallet,
     side,
     ...(priceChange != null ? { price_change: priceChange } : {}),

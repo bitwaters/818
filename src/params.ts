@@ -34,6 +34,7 @@ const ParamsSchema = z.object({
   }),
   pass: z.object({
     visiting_can_boost: z.boolean(),
+    signal_enabled: chainBool.default({ sol: true, bsc: true }),
     min_entry_mc: z
       .object({
         sol: z.number().nonnegative().default(0),
@@ -50,9 +51,14 @@ const ParamsSchema = z.object({
     min_volume_usd: z.number().nonnegative(),
     min_swaps: z.number().nonnegative(),
     min_price_change_1m: z.number().nonnegative(),
+    /** 达到该 1m 涨幅视为追高；0 关闭 */
+    max_price_change_1m: z.number().nonnegative().default(0),
     min_price_change_5m: z.number().nonnegative(),
     /** 买/卖笔数比 ≥ 此值视为假动量否决；0 关闭 */
     max_buy_sell_ratio: z.number().nonnegative().default(0),
+    /** 1m 成交量 / 市值的合理区间；0 关闭对应边界 */
+    min_volume_market_cap_ratio: z.number().nonnegative().default(0),
+    max_volume_market_cap_ratio: z.number().nonnegative().default(0),
   }),
   attention: z.object({
     min_visiting_count: z.number().nonnegative(),

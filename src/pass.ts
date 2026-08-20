@@ -25,7 +25,10 @@ export function lastSides(
 ): LastSides {
   const windowed = tradesInWindow(trades, now, ttlSec);
   const last = new Map<string, SmartTrade>();
-  for (const trade of windowed) last.set(trade.wallet, trade);
+  for (const trade of windowed) {
+    const previous = last.get(trade.wallet);
+    if (!previous || trade.ts > previous.ts) last.set(trade.wallet, trade);
+  }
   let eligible = 0;
   let eligible_strict = 0;
   let buyWallets = 0;
@@ -75,6 +78,21 @@ export function tapeOk(tape: Tape1m, params: Params["tape"]): boolean {
   );
 }
 
+export function tapeVolumeMarketCapOk(
+  tape: Tape1m,
+  marketCap: number,
+  params: Params["tape"],
+): boolean {
+  const ratio = tape.volume / marketCap;
+  if (params.min_volume_market_cap_ratio > 0 && ratio < params.min_volume_market_cap_ratio) {
+    return false;
+  }
+  if (params.max_volume_market_cap_ratio > 0 && ratio > params.max_volume_market_cap_ratio) {
+    return false;
+  }
+  return true;
+}
+
 export function tapeFakeMomentum(tape: Tape1m, maxRatio: number): boolean {
   if (!(maxRatio > 0) || !(tape.sells > 0)) return false;
   return tape.buys / tape.sells >= maxRatio;
@@ -94,6 +112,7 @@ export type PassResult =
   | { kind: "pass"; cluster: boolean; boost: boolean; eligible: number };
 
 export function evaluatePass(entry: CacheEntry, params: Params, now: number): PassResult {
+  if (!params.pass.signal_enabled[entry.chain]) return { kind: "drop", reason: "chain_disabled" };
   const sides = lastSides(
     entry.trades,
     now,
@@ -106,21 +125,13 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   const tape = usableTape1m(entry, now, params.cache.evidence_ttl_sec);
   if (!tapeComplete(tape)) return { kind: "skip", reason: "tape_incomplete" };
   if (!tapeOk(tape, params.tape)) return { kind: "drop", reason: "tape" };
+  if (
+    params.tape.max_price_change_1m > 0 &&
+    tape.price_change_1m >= params.tape.max_price_change_1m
+  ) {
+    return { kind: "drop", reason: "tape_chase" };
+  }
   if (tapeFakeMomentum(tape, params.tape.max_buy_sell_ratio)) {
-    // #region agent log
-    fetch("http://127.0.0.1:7878/ingest/8c69d535-940b-4345-8c6a-a5c24d5224c8", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f281b7" },
-      body: JSON.stringify({
-        sessionId: "f281b7",
-        hypothesisId: "D",
-        location: "pass.ts:tape_fake",
-        message: "drop fake buy/sell ratio",
-        data: { chain: entry.chain, buys: tape.buys, sells: tape.sells, volume: tape.volume },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => undefined);
-    // #endregion
     return { kind: "drop", reason: "tape_fake" };
   }
   if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
@@ -131,24 +142,19 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   }
 
   const minMc = params.pass.min_entry_mc[entry.chain];
-  if (minMc > 0) {
-    const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
+  const needsMc =
+    minMc > 0 ||
+    params.tape.min_volume_market_cap_ratio > 0 ||
+    params.tape.max_volume_market_cap_ratio > 0;
+  const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
+  if (needsMc) {
     if (mc == null) return { kind: "skip", reason: "entry_mc_incomplete" };
+    if (!tapeVolumeMarketCapOk(tape, mc, params.tape)) {
+      return { kind: "drop", reason: "tape_volume_mc" };
+    }
+  }
+  if (minMc > 0 && mc != null) {
     if (mc < minMc) {
-      // #region agent log
-      fetch("http://127.0.0.1:7878/ingest/8c69d535-940b-4345-8c6a-a5c24d5224c8", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f281b7" },
-        body: JSON.stringify({
-          sessionId: "f281b7",
-          hypothesisId: "B",
-          location: "pass.ts:entry_mc",
-          message: "drop sol microcap",
-          data: { chain: entry.chain, mc, minMc },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => undefined);
-      // #endregion
       return { kind: "drop", reason: "entry_mc" };
     }
   }

@@ -5,7 +5,7 @@ import { gmgnRequest, shouldLogGmgnFail, unwrapList } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
-import type { Chain } from "../types.js";
+import type { Chain, SmartTrade } from "../types.js";
 import { parseTrade, tokenAddress } from "./parse.js";
 
 export async function pollSmartmoney(opts: {
@@ -30,13 +30,19 @@ export async function pollSmartmoney(opts: {
   }
   const now = opts.now();
   const touched = new Set<string>();
+  const grouped = new Map<string, SmartTrade[]>();
   for (const item of unwrapList(result.data)) {
     if (!item || typeof item !== "object") continue;
     const row = item as Record<string, unknown>;
     const ca = tokenAddress(row);
     const trade = parseTrade(row, now);
     if (!ca || !trade) continue;
-    opts.cache.writeTrades(opts.chain, ca, [trade], {
+    const trades = grouped.get(ca) ?? [];
+    trades.push(trade);
+    grouped.set(ca, trades);
+  }
+  for (const [ca, trades] of grouped) {
+    opts.cache.writeTrades(opts.chain, ca, trades, {
       now,
       ttlSec: opts.params.cache.evidence_ttl_sec,
     });

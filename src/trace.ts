@@ -13,6 +13,8 @@ export interface TickSnapshot {
   eligible_strict: number;
   buy_wallets: number;
   sell_wallets: number;
+  buy_usd: number;
+  sell_usd: number;
   volume: number | null;
   swaps: number | null;
   buys: number | null;
@@ -31,6 +33,8 @@ export interface WatchState {
   lastEligibleStrict: number;
   lastBuy: number;
   lastSell: number;
+  lastBuyUsd: number;
+  lastSellUsd: number;
   lastMc: number | null;
 }
 
@@ -51,6 +55,8 @@ export function tickFingerprint(snap: TickSnapshot): string {
     snap.eligible_strict,
     snap.buy_wallets,
     snap.sell_wallets,
+    snap.buy_usd,
+    snap.sell_usd,
     snap.buys,
     snap.sells,
     snap.volume,
@@ -72,7 +78,8 @@ export function isCountIncrease(prev: WatchState, snap: TickSnapshot): boolean {
     snap.eligible_strict !== prev.lastEligibleStrict ||
     snap.buy_wallets !== prev.lastBuy ||
     snap.sell_wallets !== prev.lastSell;
-  return visChanged || smChange;
+  const amountChange = snap.buy_usd !== prev.lastBuyUsd || snap.sell_usd !== prev.lastSellUsd;
+  return visChanged || smChange || amountChange;
 }
 
 export function isInterestingTick(
@@ -129,6 +136,8 @@ function snapshotOf(
     eligible_strict: sides.eligible_strict,
     buy_wallets: sides.buyWallets,
     sell_wallets: sides.sellWallets,
+    buy_usd: sides.buyUsd,
+    sell_usd: sides.sellUsd,
     volume: tape.volume ?? null,
     swaps: tape.swaps ?? null,
     buys: tape.buys ?? null,
@@ -170,6 +179,8 @@ export class TickRecorder {
         eligible_strict INTEGER,
         buy_wallets INTEGER,
         sell_wallets INTEGER,
+        buy_usd REAL,
+        sell_usd REAL,
         volume REAL,
         swaps INTEGER,
         buys INTEGER,
@@ -181,15 +192,17 @@ export class TickRecorder {
     `);
     ensureTicksColumn(this.db, "buys", "INTEGER");
     ensureTicksColumn(this.db, "sells", "INTEGER");
+    ensureTicksColumn(this.db, "buy_usd", "REAL");
+    ensureTicksColumn(this.db, "sell_usd", "REAL");
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ca_ts ON ticks (chain, ca, ts)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS ticks_ts ON ticks (ts)`);
     this.insert = this.db.prepare(`
       INSERT INTO ticks (
         ts, chain, ca, visiting, eligible, eligible_strict, buy_wallets, sell_wallets,
-        volume, swaps, buys, sells, pc_1m, mc, pushed
+        buy_usd, sell_usd, volume, swaps, buys, sells, pc_1m, mc, pushed
       ) VALUES (
         @ts, @chain, @ca, @visiting, @eligible, @eligible_strict, @buy_wallets, @sell_wallets,
-        @volume, @swaps, @buys, @sells, @pc_1m, @mc, @pushed
+        @buy_usd, @sell_usd, @volume, @swaps, @buys, @sells, @pc_1m, @mc, @pushed
       )
     `);
     this.pruneStmt = this.db.prepare(`DELETE FROM ticks WHERE ts < ?`);
@@ -230,6 +243,8 @@ export class TickRecorder {
         lastEligibleStrict: -1,
         lastBuy: -1,
         lastSell: -1,
+        lastBuyUsd: -1,
+        lastSellUsd: -1,
         lastMc: null,
       };
       this.watches.set(key, watch);
@@ -309,6 +324,8 @@ export class TickRecorder {
     watch.lastEligibleStrict = snap.eligible_strict;
     watch.lastBuy = snap.buy_wallets;
     watch.lastSell = snap.sell_wallets;
+    watch.lastBuyUsd = snap.buy_usd;
+    watch.lastSellUsd = snap.sell_usd;
     watch.lastMc = snap.mc;
   }
 }
