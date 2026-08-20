@@ -23,7 +23,7 @@ describe("参数与发送开关", () => {
     assert.equal(params.hot_pool.enabled, true);
     assert.equal(params.hot_pool.rank_limit, 100);
     assert.equal(params.tape.require_price_change_5m, true);
-    assert.equal(params.tape.min_volume_market_cap_ratio, 0.5);
+    assert.equal(params.tape.min_volume_market_cap_ratio, 0.25);
     assert.equal(params.tape.max_volume_market_cap_ratio, 2);
     assert.equal(params.pass.signal_enabled.sol, false);
     assert.equal(params.pass.signal_enabled.bsc, true);

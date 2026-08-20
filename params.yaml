@@ -68,7 +68,7 @@ tape:
   # 买/卖笔数比 ≥ 此值否决（薄盘对倒）；不把门槛从「买>卖」再拧紧
   max_buy_sell_ratio: 3
   # 用相对活跃度替代单纯 $5k 绝对成交额：过薄无确认，过高多为末端/对倒。
-  min_volume_market_cap_ratio: 0.5
+  min_volume_market_cap_ratio: 0.25
   max_volume_market_cap_ratio: 2.0
 
 attention:
