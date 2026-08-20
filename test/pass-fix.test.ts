@@ -311,3 +311,95 @@ describe("回放调优后的盘口边界", () => {
     assert.deepEqual(snap, { holder_count: 321, sniper_count: 9 });
   });
 });
+
+describe("BSC v3 临时安全护栏", () => {
+  const guarded = () =>
+    testParams((p) => {
+      p.pass.min_entry_mc.bsc = 30_000;
+      p.pass.min_liquidity_usd.bsc = 10_000;
+      p.tape.max_price_change_1m = 100;
+      p.tape.require_price_change_5m = true;
+      p.tape.min_volume_market_cap_ratio = 0.5;
+      p.tape.max_volume_market_cap_ratio = 2;
+      p.l0_bsc.min_holder_count = 50;
+      p.l0_bsc.bot_degen_rate_max = 0.3;
+    });
+
+  const ready = (h: ReturnType<typeof makeHarness>, patch: Parameters<typeof seed>[3] = {}) =>
+    seed(h, "bsc", BSC_CA, {
+      l0: L0_BSC,
+      tape: { ...GOOD_TAPE, volume: 40_000 },
+      trades: twoBuys(h.now),
+      visiting: 150,
+      priceChange5m: 12,
+      marketCap: 50_000,
+      liquidity: 20_000,
+      ...patch,
+    });
+
+  it("完整且处于安全区间时通过", async () => {
+    const h = makeHarness({ params: guarded() });
+    ready(h);
+    assert.equal((await evalOf(h, "bsc", BSC_CA)).decision, "push");
+  });
+
+  it("缺 5m 或流动性时等待，不盲目放行", async () => {
+    const no5m = makeHarness({ params: guarded() });
+    ready(no5m, { priceChange5m: undefined });
+    assert.equal((await evalOf(no5m, "bsc", BSC_CA)).reason, "tape_5m_incomplete");
+
+    const noLiquidity = makeHarness({ params: guarded() });
+    ready(noLiquidity, { liquidity: undefined });
+    assert.equal((await evalOf(noLiquidity, "bsc", BSC_CA)).reason, "liquidity_incomplete");
+
+    const staleLiquidity = makeHarness({ params: guarded() });
+    const staleEntry = ready(staleLiquidity);
+    staleEntry.liquidity_written_at = staleLiquidity.now - 181_000;
+    assert.equal(
+      (await evalOf(staleLiquidity, "bsc", BSC_CA)).reason,
+      "liquidity_incomplete",
+    );
+  });
+
+  it("微市值、低流动性和 1m 追高分别否决", async () => {
+    const micro = makeHarness({ params: guarded() });
+    ready(micro, { marketCap: 20_000, tape: { ...GOOD_TAPE, volume: 20_000 } });
+    assert.equal((await evalOf(micro, "bsc", BSC_CA)).reason, "entry_mc");
+
+    const thin = makeHarness({ params: guarded() });
+    ready(thin, { liquidity: 9_999 });
+    assert.equal((await evalOf(thin, "bsc", BSC_CA)).reason, "liquidity");
+
+    const chase = makeHarness({ params: guarded() });
+    ready(chase, { tape: { ...GOOD_TAPE, price_change_1m: 100, volume: 40_000 } });
+    assert.equal((await evalOf(chase, "bsc", BSC_CA)).reason, "tape_chase");
+  });
+
+  it("持有人过少或 bot 占比过高由 L0 否决", async () => {
+    const holders = makeHarness({ params: guarded() });
+    ready(holders, { l0: { ...L0_BSC, holder_count: 49 } });
+    assert.equal((await evalOf(holders, "bsc", BSC_CA)).reason, "holder_count");
+
+    const bots = makeHarness({ params: guarded() });
+    ready(bots, { l0: { ...L0_BSC, bot_degen_rate: 0.31 } });
+    assert.equal((await evalOf(bots, "bsc", BSC_CA)).reason, "bot_degen");
+  });
+
+  it("陈旧或非法 holder/bot 数据不能放行", async () => {
+    const stale = makeHarness({ params: guarded() });
+    const staleEntry = ready(stale);
+    staleEntry.l0_written_at!.holder_count = stale.now - 181_000;
+    assert.equal((await evalOf(stale, "bsc", BSC_CA)).reason, "security_failed");
+
+    const malformed = makeHarness({ params: guarded() });
+    ready(malformed, { l0: { ...L0_BSC, bot_degen_rate: "bad" } });
+    assert.equal((await evalOf(malformed, "bsc", BSC_CA)).reason, "security_failed");
+
+    const invalidCoreRisk = makeHarness({ params: guarded() });
+    ready(invalidCoreRisk, { l0: { ...L0_BSC, sell_tax: "", rug_ratio: "bad" } });
+    assert.equal(
+      (await evalOf(invalidCoreRisk, "bsc", BSC_CA)).reason,
+      "security_failed",
+    );
+  });
+});

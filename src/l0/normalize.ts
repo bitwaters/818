@@ -8,7 +8,7 @@ export function hasKey(record: Record<string, unknown>, key: string): boolean {
 
 export function asNumber(value: unknown): number | undefined {
   if (isMissing(value)) return undefined;
-  if (value === "") return 0;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : undefined;
 }

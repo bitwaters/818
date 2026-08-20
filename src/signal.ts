@@ -1,4 +1,10 @@
-import { usableMarketCap, usablePriceChange5m, usableVisiting } from "./cache.js";
+import {
+  usableLiquidity,
+  usableL0,
+  usableMarketCap,
+  usablePriceChange5m,
+  usableVisiting,
+} from "./cache.js";
 import type { Params } from "./params.js";
 import { evaluatePass, lastSides, type PassResult } from "./pass.js";
 import type { CacheEntry, PassKind, Signal } from "./types.js";
@@ -28,8 +34,11 @@ export function buildSignal(
   const mc = usableMarketCap(entry, now, params.cache.evidence_ttl_sec);
   const visiting = usableVisiting(entry, now, params.cache.evidence_ttl_sec);
   const pc5 = usablePriceChange5m(entry, now, params.cache.evidence_ttl_sec);
+  const liquidity = usableLiquidity(entry, now, params.cache.evidence_ttl_sec);
+  const l0 = usableL0(entry, now, params.cache.evidence_ttl_sec);
   const kind = passKindOf(pass);
   return {
+    rule_version: params.rules.version,
     chain: entry.chain,
     ca: entry.ca,
     symbol: entry.symbol ?? "",
@@ -41,6 +50,7 @@ export function buildSignal(
       sell_wallets: sides.sellWallets,
       buy_usd: sides.buyUsd,
       sell_usd: sides.sellUsd,
+      has_usd: sides.hasUsd,
       ...(kind ? { pass_kind: kind } : {}),
       ...(tape.price_change_1m != null ? { price_change_1m: tape.price_change_1m } : {}),
       ...(pc5 != null ? { price_change_5m: pc5 } : {}),
@@ -50,9 +60,9 @@ export function buildSignal(
       ...(tape.swaps != null ? { swaps: tape.swaps } : {}),
       ...(visiting != null ? { visiting_count: visiting } : {}),
       ...(mc != null ? { market_cap: mc } : {}),
-      ...(entry.liquidity != null ? { liquidity: entry.liquidity } : {}),
+      ...(liquidity != null ? { liquidity } : {}),
     },
-    l0: { ...entry.l0 },
+    l0: { ...l0 },
     links: { gmgn: gmgnUrl(params, entry.chain, entry.ca) },
   };
 }

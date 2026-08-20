@@ -26,6 +26,8 @@ const prev = (): WatchState => ({
   lastEligibleStrict: 0,
   lastBuy: 1,
   lastSell: 0,
+  lastBuyUsd: 100,
+  lastSellUsd: 0,
   lastMc: 10_000,
 });
 
@@ -36,6 +38,8 @@ function baseSnap(patch: Partial<TickSnapshot> = {}): TickSnapshot {
     eligible_strict: 0,
     buy_wallets: 1,
     sell_wallets: 0,
+    buy_usd: 100,
+    sell_usd: 0,
     volume: null,
     swaps: null,
     buys: null,
@@ -175,6 +179,21 @@ test("stale market cap is stored as null on ticks", () => {
   rec.stop();
 });
 
+test("stale tape is stored as null instead of replaying expired momentum", () => {
+  const db = new Database(":memory:");
+  const rec = new TickRecorder(db, recorderParams(), pino({ level: "silent" }));
+  const now = 1_700_000_000_000;
+  rec.note(tokenAt(now, { tape_written_at: now - 200_000 }), now, false);
+  rec.flush();
+  const row = db.prepare(`SELECT volume, buys, pc_1m FROM ticks LIMIT 1`).get() as {
+    volume: number | null;
+    buys: number | null;
+    pc_1m: number | null;
+  };
+  assert.deepEqual(row, { volume: null, buys: null, pc_1m: null });
+  rec.stop();
+});
+
 test("candidate table records rejected/disabled-chain research fields and outcome", () => {
   const db = new Database(":memory:");
   const rec = new TickRecorder(db, recorderParams(), pino({ level: "silent" }));
@@ -189,6 +208,7 @@ test("candidate table records rejected/disabled-chain research fields and outcom
   rec.note(
     tokenAt(t0 + 6_000, {
       market_cap: 15_000,
+      l0: { holder_count: 42, sniper_count: 7 },
     }),
     t0 + 6_000,
     true,
@@ -204,6 +224,92 @@ test("candidate table records rejected/disabled-chain research fields and outcom
   assert.equal(row.max_mc, 15_000);
   assert.deepEqual(JSON.parse(row.l0_json), { holder_count: 42, sniper_count: 7 });
   assert.equal(row.pushed, 1);
+  rec.stop();
+});
+
+test("candidate baseline resets across rule versions and never preserves stale L0", () => {
+  const db = new Database(":memory:");
+  const params = recorderParams();
+  params.rules.version = "legacy-rule";
+  const now = 1_700_000_000_000;
+  const legacy = new TickRecorder(db, params, pino({ level: "silent" }));
+  legacy.note(
+    tokenAt(now, {
+      market_cap: 50_000,
+      l0: { holder_count: 500 },
+      l0_written_at: { holder_count: now },
+    }),
+    now,
+    true,
+  );
+  legacy.flush();
+  legacy.stop();
+
+  params.rules.version = "new-rule";
+  const current = new TickRecorder(db, params, pino({ level: "silent" }));
+  current.note(
+    tokenAt(now + 200_000, {
+      market_cap: 20_000,
+      market_cap_written_at: now + 200_000,
+      l0: { holder_count: 500 },
+      l0_written_at: { holder_count: now },
+    }),
+    now + 200_000,
+    false,
+  );
+  current.flush();
+  const row = db.prepare(`SELECT * FROM candidates WHERE chain = ? AND ca = ?`).get("sol", SOL_CA) as {
+    first_seen: number;
+    first_mc: number;
+    max_mc: number;
+    l0_json: string;
+    pushed: number;
+    rule_version: string;
+  };
+  assert.equal(row.rule_version, "new-rule");
+  assert.equal(row.first_seen, now + 200_000);
+  assert.equal(row.first_mc, 20_000);
+  assert.equal(row.max_mc, 20_000);
+  assert.deepEqual(JSON.parse(row.l0_json), {});
+  assert.equal(row.pushed, 0);
+  current.stop();
+});
+
+test("decision events keep rule version, exact rejection evidence, and shadow fields", () => {
+  const db = new Database(":memory:");
+  const params = recorderParams();
+  params.rules.version = "test-rule";
+  const rec = new TickRecorder(db, params, pino({ level: "silent" }));
+  const now = 1_700_000_000_000;
+  const entry = tokenAt(now, {
+    price_change_5m: 12,
+    price_change_5m_written_at: now,
+    liquidity: 12_000,
+    l0: { creator_close: true, sniper_count: 5 },
+  });
+  rec.noteDecision({
+    entry,
+    decision: "drop",
+    reason: "liquidity",
+    stage: "prepass",
+    ts: now,
+  });
+  rec.noteDecision({
+    entry,
+    decision: "drop",
+    reason: "liquidity",
+    stage: "prepass",
+    ts: now + 1,
+  });
+  const rows = db.prepare(`SELECT * FROM decision_events`).all() as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.rule_version, "test-rule");
+  assert.equal(rows[0]?.reason, "liquidity");
+  assert.equal(rows[0]?.has_usd, 0);
+  assert.deepEqual(JSON.parse(String(rows[0]?.shadow_json)), {
+    creator_close: true,
+    sniper_count: 5,
+  });
   rec.stop();
 });
 

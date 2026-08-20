@@ -73,6 +73,7 @@ export function start(opts?: { paramsPath?: string }): {
         evidence: { ...signal.evidence, market_cap: mc },
       });
     },
+    recordDecision: (record) => trace?.noteDecision(record),
     emit: (signal) => {
       for (const fn of listeners) {
         try {

@@ -63,4 +63,33 @@ describe("审查修复", () => {
     assert.equal(result.reason, "tape_incomplete");
     assert.equal(h.telegram.signals.length, 0);
   });
+
+  it("真实记录 prepass/security/final/delivery 决策阶段", async () => {
+    const h = makeHarness();
+    seedReady(h);
+    const result = await evalOf(h);
+    assert.equal(result.decision, "push");
+    assert.deepEqual(
+      h.decisions.map((d) => [d.stage, d.decision, d.reason]),
+      [
+        ["prepass", "pass", "prepass_pass"],
+        ["security", "pass", "l0_pass"],
+        ["final", "pass", "final_pass"],
+        ["delivery", "push", "pass"],
+      ],
+    );
+  });
+
+  it("Telegram 抛异常后清理 pending 并返回可重试失败", async () => {
+    const h = makeHarness();
+    seedReady(h);
+    h.telegram.sendSignal = async () => {
+      throw new Error("network");
+    };
+    const result = await evalOf(h);
+    assert.equal(result.decision, "skip");
+    assert.equal(result.reason, "telegram_failed");
+    assert.equal(h.pipeline.isPending("sol", SOL_CA), false);
+    assert.equal(h.pipeline.isCooling("sol", SOL_CA, h.now), false);
+  });
 });

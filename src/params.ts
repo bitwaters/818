@@ -9,6 +9,11 @@ const chainBool = z.object({
 });
 
 const ParamsSchema = z.object({
+  rules: z
+    .object({
+      version: z.string().min(1),
+    })
+    .default({ version: "legacy" }),
   chains: chainBool,
   poll: z.object({
     smartmoney: z.number().positive(),
@@ -41,6 +46,12 @@ const ParamsSchema = z.object({
         bsc: z.number().nonnegative().default(0),
       })
       .default({ sol: 0, bsc: 0 }),
+    min_liquidity_usd: z
+      .object({
+        sol: z.number().nonnegative().default(0),
+        bsc: z.number().nonnegative().default(0),
+      })
+      .default({ sol: 0, bsc: 0 }),
   }),
   flow: z.object({
     min_smart_wallets: z.number().int().min(1),
@@ -54,6 +65,8 @@ const ParamsSchema = z.object({
     /** 达到该 1m 涨幅视为追高；0 关闭 */
     max_price_change_1m: z.number().nonnegative().default(0),
     min_price_change_5m: z.number().nonnegative(),
+    /** true 时缺少新鲜 5m 动量只等待，不允许直接放行。 */
+    require_price_change_5m: z.boolean().default(false),
     /** 买/卖笔数比 ≥ 此值视为假动量否决；0 关闭 */
     max_buy_sell_ratio: z.number().nonnegative().default(0),
     /** 1m 成交量 / 市值的合理区间；0 关闭对应边界 */
@@ -86,6 +99,10 @@ const ParamsSchema = z.object({
     rat_trader_rate_max: z.number(),
     bundler_rate_max: z.number(),
     top10_holder_rate_max: z.number(),
+    /** 0 关闭；启用时缺字段触发 security 补全，仍缺则不放行。 */
+    min_holder_count: z.number().int().nonnegative().default(0),
+    /** 0 关闭。 */
+    bot_degen_rate_max: z.number().nonnegative().default(0),
     drop_signal_10: z.boolean(),
   }),
   push: z.object({

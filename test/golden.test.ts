@@ -409,7 +409,7 @@ describe("金样例 21b、23–32 统计", () => {
       cache: h.cache,
       telegram: h.telegram,
       fetchInfoMc: async () => null,
-      now: h.now,
+      now: h.now + 60_000,
     });
     const row = store.activeRows(h.now)[0]!;
     assert.equal(row.max_mc, 200);
@@ -441,7 +441,7 @@ describe("金样例 21b、23–32 统计", () => {
       cache: h.cache,
       telegram: h.telegram,
       fetchInfoMc: async () => null,
-      now: h.now,
+      now: h.now + 60_000,
     });
     assert.equal(store.activeRows(h.now)[0]!.last_milestone, 0);
     store.close();
@@ -478,7 +478,7 @@ describe("金样例 21b、23–32 统计", () => {
       cache: h.cache,
       telegram: h.telegram,
       fetchInfoMc: async () => null,
-      now: h.now,
+      now: h.now + 60_000,
     });
     assert.equal(h.telegram.texts.length, 1);
     assert.match(h.telegram.texts[0] ?? "", /\+200%/);
@@ -586,7 +586,7 @@ describe("金样例 21b、23–32 统计", () => {
       cache: h.cache,
       telegram: h.telegram,
       fetchInfoMc: async () => info,
-      now: h.now,
+      now: h.now + 60_000,
     });
     row = store.activeRows(h.now)[0]!;
     assert.equal(row.max_mc, 150);

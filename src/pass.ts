@@ -1,4 +1,11 @@
-import { tradesInWindow, usableMarketCap, usablePriceChange5m, usableTape1m, usableVisiting } from "./cache.js";
+import {
+  tradesInWindow,
+  usableLiquidity,
+  usableMarketCap,
+  usablePriceChange5m,
+  usableTape1m,
+  usableVisiting,
+} from "./cache.js";
 import type { Params } from "./params.js";
 import type { CacheEntry, SmartTrade, Tape1m } from "./types.js";
 
@@ -120,7 +127,14 @@ export function visitingOk(count: number | undefined, min: number): boolean {
 }
 
 export type PassResult =
-  | { kind: "skip"; reason: "tape_incomplete" | "entry_mc_incomplete" }
+  | {
+      kind: "skip";
+      reason:
+        | "tape_incomplete"
+        | "tape_5m_incomplete"
+        | "entry_mc_incomplete"
+        | "liquidity_incomplete";
+    }
   | { kind: "drop"; reason: string }
   | { kind: "pass"; cluster: boolean; boost: boolean; eligible: number };
 
@@ -147,11 +161,21 @@ export function evaluatePass(entry: CacheEntry, params: Params, now: number): Pa
   if (tapeFakeMomentum(tape, params.tape.max_buy_sell_ratio)) {
     return { kind: "drop", reason: "tape_fake" };
   }
+  if (params.tape.require_price_change_5m && pc5 == null) {
+    return { kind: "skip", reason: "tape_5m_incomplete" };
+  }
   if (pc5 != null && !tape5mOk(pc5, params.tape.min_price_change_5m)) {
     return { kind: "drop", reason: "tape_5m" };
   }
   if (vis != null && !visitingOk(vis, params.attention.min_visiting_count)) {
     return { kind: "drop", reason: "visiting" };
+  }
+
+  const minLiquidity = params.pass.min_liquidity_usd[entry.chain];
+  if (minLiquidity > 0) {
+    const liquidity = usableLiquidity(entry, now, params.cache.evidence_ttl_sec);
+    if (liquidity == null) return { kind: "skip", reason: "liquidity_incomplete" };
+    if (liquidity < minLiquidity) return { kind: "drop", reason: "liquidity" };
   }
 
   const minMc = params.pass.min_entry_mc[entry.chain];

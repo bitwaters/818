@@ -1,3 +1,6 @@
+rules:
+  version: "v3-bsc-guard"
+
 chains:
   sol: true
   bsc: true
@@ -32,7 +35,10 @@ pass:
     bsc: true
   min_entry_mc:
     sol: 10000   # SOL 微盘直接死；缺市值 skip 等 1m 热门
-    bsc: 0       # BSC 暂不按市值砍
+    bsc: 30000   # 临时安全护栏：极低市值 BSC 样本回撤风险过高
+  min_liquidity_usd:
+    sol: 0
+    bsc: 10000   # 缺流动性先等待，低于 $10k 否决
 
 flow:
   min_smart_wallets: 2
@@ -43,10 +49,11 @@ tape:
   min_volume_usd: 5000
   min_swaps: 20
   min_price_change_1m: 20
-  # >=200% 属于末端追高；历史回放的先跌风险显著上升。
-  max_price_change_1m: 200
-  # 有新鲜 5m 时必须 > 该值（0 即必须为正）；不在 5m 热门榜则不否决
+  # 临时护栏：>=100% 视为末端追高；待 v3 样本充分后再校准。
+  max_price_change_1m: 100
+  # 必须有新鲜 5m 且 > 该值（0 即必须为正）。
   min_price_change_5m: 0
+  require_price_change_5m: true
   # 买/卖笔数比 ≥ 此值否决（薄盘对倒）；不把门槛从「买>卖」再拧紧
   max_buy_sell_ratio: 3
   # 用相对活跃度替代单纯 $5k 绝对成交额：过薄无确认，过高多为末端/对倒。
@@ -80,6 +87,8 @@ l0_bsc:
   rat_trader_rate_max: 0.3
   bundler_rate_max: 0.3
   top10_holder_rate_max: 0.5
+  min_holder_count: 50
+  bot_degen_rate_max: 0.3
   drop_signal_10: true
 
 push:

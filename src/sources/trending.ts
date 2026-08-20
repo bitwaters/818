@@ -119,7 +119,7 @@ export async function pollTrending(opts: {
       if (writeRankVisiting(opts.cache, opts.chain, ca, row, now)) visitingN += 1;
       const mc = numField(row, "market_cap", "usd_market_cap");
       if (mc != null) opts.cache.writeMarketCap(opts.chain, ca, mc, now);
-      opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row));
+      opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row), now);
     });
     await opts.pipeline.onWrite(opts.chain, ca);
   }

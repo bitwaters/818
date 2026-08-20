@@ -36,6 +36,34 @@ export function usableMarketCap(
   return mc;
 }
 
+export function usableLiquidity(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): number | undefined {
+  const value = entry.liquidity;
+  if (value == null || !(value >= 0)) return undefined;
+  // 兼容直接构造的旧缓存/测试；生产写入始终带字段时间。
+  if (entry.liquidity_written_at == null) return value;
+  if (now - entry.liquidity_written_at >= ttlSec * 1000) return undefined;
+  return value;
+}
+
+export function usableL0(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): Record<string, unknown> {
+  const stamps = entry.l0_written_at;
+  if (!stamps) return entry.l0;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entry.l0)) {
+    const writtenAt = stamps[key];
+    if (writtenAt == null || now - writtenAt < ttlSec * 1000) out[key] = value;
+  }
+  return out;
+}
+
 export function isVisitingFresh(
   entry: CacheEntry,
   now: number,
@@ -186,7 +214,10 @@ export class TokenCache {
     entry.tape = { ...entry.tape, ...tape };
     if (extras?.now != null) entry.tape_written_at = extras.now;
     if (extras?.symbol) entry.symbol = extras.symbol;
-    if (extras?.liquidity != null) entry.liquidity = extras.liquidity;
+    if (extras?.liquidity != null) {
+      entry.liquidity = extras.liquidity;
+      if (extras.now != null) entry.liquidity_written_at = extras.now;
+    }
     this.emitMutate(entry);
     return entry;
   }
@@ -271,11 +302,20 @@ export class TokenCache {
     return entry;
   }
 
-  mergeL0(chain: Chain, rawCa: string, fields: Record<string, unknown>): CacheEntry | null {
+  mergeL0(
+    chain: Chain,
+    rawCa: string,
+    fields: Record<string, unknown>,
+    now = Date.now(),
+  ): CacheEntry | null {
     const entry = this.upsert(chain, rawCa);
     if (!entry) return null;
+    entry.l0_written_at ??= {};
     for (const [k, v] of Object.entries(fields)) {
-      if (v !== undefined) entry.l0[k] = v;
+      if (v !== undefined) {
+        entry.l0[k] = v;
+        entry.l0_written_at[k] = now;
+      }
     }
     this.emitMutate(entry);
     return entry;

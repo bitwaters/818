@@ -41,8 +41,11 @@ export interface CacheEntry {
   market_cap?: number;
   market_cap_written_at?: number;
   liquidity?: number;
+  liquidity_written_at?: number;
   signal10_at?: number;
   l0: Record<string, unknown>;
+  /** L0 按字段记录更新时间，防止部分响应刷新整份旧快照。 */
+  l0_written_at?: Record<string, number>;
 }
 
 export type PassKind = "cluster" | "boost";
@@ -64,9 +67,12 @@ export interface SignalEvidence {
   visiting_count?: number;
   market_cap?: number;
   liquidity?: number;
+  /** 净买判断是否使用了完整 USD 成交额；false 时退回钱包方向。 */
+  has_usd?: boolean;
 }
 
 export interface Signal {
+  rule_version: string;
   chain: Chain;
   ca: string;
   symbol: string;
@@ -74,6 +80,22 @@ export interface Signal {
   evidence: SignalEvidence;
   l0: Record<string, unknown>;
   links: { gmgn: string };
+}
+
+export type DecisionStage =
+  | "cache"
+  | "prepass"
+  | "security"
+  | "final"
+  | "delivery";
+
+export interface DecisionRecord {
+  entry: CacheEntry;
+  decision: Decision | "pass";
+  reason: string;
+  stage: DecisionStage;
+  ts: number;
+  quota_skipped?: boolean;
 }
 
 export type L0Status =

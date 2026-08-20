@@ -8,7 +8,14 @@ import type { Logger } from "../src/logger.ts";
 import { parseParams, type Params } from "../src/params.ts";
 import type { TelegramSender } from "../src/push/telegram.ts";
 import { QuotaTracker } from "../src/quota.ts";
-import type { CacheEntry, Chain, Signal, SmartTrade, Tape1m } from "../src/types.ts";
+import type {
+  CacheEntry,
+  Chain,
+  DecisionRecord,
+  Signal,
+  SmartTrade,
+  Tape1m,
+} from "../src/types.ts";
 
 export const SOL_CA = "SoLTest11111111111111111111111111111111112";
 export const BSC_CA = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -23,8 +30,13 @@ export function testParams(mut?: (p: Params) => void): Params {
   // 大多数金样例只验证原有单一规则；新增生产过滤由专项用例覆盖。
   params.pass.signal_enabled = { sol: true, bsc: true };
   params.tape.max_price_change_1m = 0;
+  params.tape.require_price_change_5m = false;
   params.tape.min_volume_market_cap_ratio = 0;
   params.tape.max_volume_market_cap_ratio = 0;
+  params.pass.min_entry_mc.bsc = 0;
+  params.pass.min_liquidity_usd = { sol: 0, bsc: 0 };
+  params.l0_bsc.min_holder_count = 0;
+  params.l0_bsc.bot_degen_rate_max = 0;
   mut?.(params);
   return parseParams(params);
 }
@@ -57,6 +69,8 @@ export const L0_BSC: Record<string, unknown> = {
   rat_trader_amount_rate: 0.1,
   bundler_rate: 0.1,
   top_10_holder_rate: 0.2,
+  holder_count: 100,
+  bot_degen_rate: 0.1,
 };
 
 export function twoBuys(now: number): SmartTrade[] {
@@ -111,6 +125,7 @@ export interface Harness {
   emitted: Signal[];
   inserted: Signal[];
   securityCalls: { chain: Chain; ca: string }[];
+  decisions: DecisionRecord[];
   now: number;
 }
 
@@ -129,6 +144,7 @@ export function makeHarness(opts?: {
   const emitted: Signal[] = [];
   const inserted: Signal[] = [];
   const securityCalls: { chain: Chain; ca: string }[] = [];
+  const decisions: DecisionRecord[] = [];
   const logger = pino({ level: "silent" });
   const clock = { now };
   const dests = telegram.destinations();
@@ -166,6 +182,7 @@ export function makeHarness(opts?: {
       pushed.add(destKey(chain, ca, chatId));
     },
     ensureInserted: insertSignal,
+    recordDecision: (record) => decisions.push(record),
     emit: (s) => {
       emitted.push(s);
     },
@@ -180,6 +197,7 @@ export function makeHarness(opts?: {
     emitted,
     inserted,
     securityCalls,
+    decisions,
     now,
   };
   Object.defineProperty(harness, "now", {
@@ -210,7 +228,7 @@ export function seed(
   },
 ): CacheEntry {
   const entry = h.cache.upsert(chain, ca)!;
-  if (patch.l0) h.cache.mergeL0(chain, ca, patch.l0);
+  if (patch.l0) h.cache.mergeL0(chain, ca, patch.l0, h.now);
   if (patch.tape) h.cache.writeTape1m(chain, ca, patch.tape, { symbol: patch.symbol, liquidity: patch.liquidity, now: h.now });
   if (patch.trades) h.cache.writeTrades(chain, ca, patch.trades);
   if (patch.visiting != null) h.cache.writeVisiting(chain, ca, patch.visiting, h.now);
