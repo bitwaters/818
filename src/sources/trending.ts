@@ -44,12 +44,14 @@ export function ingestTrending5m(opts: {
     const entry = opts.cache.upsert(opts.chain, ca);
     if (!entry) continue;
     present.add(entry.ca);
-    const pct = numField(row, "price_change_percent", "price_change_5m", "change5m");
-    if (pct != null) opts.cache.writePriceChange5m(opts.chain, ca, pct, opts.now);
-    opts.cache.writeTape5m(opts.chain, ca, tapeFromRank(row), opts.now);
-    if (writeRankVisiting(opts.cache, opts.chain, ca, row, opts.now)) visitingN += 1;
-    const symbol = typeof row.symbol === "string" ? row.symbol : undefined;
-    if (symbol) opts.cache.writeSymbol(opts.chain, ca, symbol);
+    opts.cache.batch(() => {
+      const pct = numField(row, "price_change_percent", "price_change_5m", "change5m");
+      if (pct != null) opts.cache.writePriceChange5m(opts.chain, ca, pct, opts.now);
+      opts.cache.writeTape5m(opts.chain, ca, tapeFromRank(row), opts.now);
+      if (writeRankVisiting(opts.cache, opts.chain, ca, row, opts.now)) visitingN += 1;
+      const symbol = typeof row.symbol === "string" ? row.symbol : undefined;
+      if (symbol) opts.cache.writeSymbol(opts.chain, ca, symbol);
+    });
   }
   if (present.size === 0) {
     return { present, cleared: [], skippedClear: true, visitingN };
@@ -111,12 +113,14 @@ export async function pollTrending(opts: {
     const tape = tapeFromRank(row);
     const pc1 = numField(row, "price_change_percent", "price_change_1m", "change1m");
     if (pc1 != null) tape.price_change_1m = pc1;
-    opts.cache.writeTape1m(opts.chain, ca, tape, { symbol, liquidity, now });
-    written += 1;
-    if (writeRankVisiting(opts.cache, opts.chain, ca, row, now)) visitingN += 1;
-    const mc = numField(row, "market_cap", "usd_market_cap");
-    if (mc != null) opts.cache.writeMarketCap(opts.chain, ca, mc, now);
-    opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row));
+    opts.cache.batch(() => {
+      opts.cache.writeTape1m(opts.chain, ca, tape, { symbol, liquidity, now });
+      written += 1;
+      if (writeRankVisiting(opts.cache, opts.chain, ca, row, now)) visitingN += 1;
+      const mc = numField(row, "market_cap", "usd_market_cap");
+      if (mc != null) opts.cache.writeMarketCap(opts.chain, ca, mc, now);
+      opts.cache.mergeL0(opts.chain, ca, pickL0Snapshot(row));
+    });
     await opts.pipeline.onWrite(opts.chain, ca);
   }
   opts.logger.info(

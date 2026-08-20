@@ -88,14 +88,35 @@ export function tradesInWindow(
 
 export class TokenCache {
   private readonly map = new Map<string, CacheEntry>();
+  private batchDepth = 0;
+  private readonly batchedMutations = new Set<CacheEntry>();
 
   constructor(private readonly onMutate?: (entry: CacheEntry) => void) {}
 
   private emitMutate(entry: CacheEntry): void {
+    if (this.batchDepth > 0) {
+      this.batchedMutations.add(entry);
+      return;
+    }
     try {
       this.onMutate?.(entry);
     } catch {
       // 轨迹失败不得挡住源写入
+    }
+  }
+
+  /** 同一来源对一个 token 的多字段更新只通知一次，避免轨迹记录中间态。 */
+  batch<T>(fn: () => T): T {
+    this.batchDepth += 1;
+    try {
+      return fn();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0 && this.batchedMutations.size > 0) {
+        const entries = [...this.batchedMutations];
+        this.batchedMutations.clear();
+        for (const entry of entries) this.emitMutate(entry);
+      }
     }
   }
 
