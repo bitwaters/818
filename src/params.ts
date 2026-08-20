@@ -34,6 +34,12 @@ const ParamsSchema = z.object({
   }),
   pass: z.object({
     visiting_can_boost: z.boolean(),
+    min_entry_mc: z
+      .object({
+        sol: z.number().nonnegative().default(0),
+        bsc: z.number().nonnegative().default(0),
+      })
+      .default({ sol: 0, bsc: 0 }),
   }),
   flow: z.object({
     min_smart_wallets: z.number().int().min(1),
@@ -45,6 +51,8 @@ const ParamsSchema = z.object({
     min_swaps: z.number().nonnegative(),
     min_price_change_1m: z.number().nonnegative(),
     min_price_change_5m: z.number().nonnegative(),
+    /** 买/卖笔数比 ≥ 此值视为假动量否决；0 关闭 */
+    max_buy_sell_ratio: z.number().nonnegative().default(0),
   }),
   attention: z.object({
     min_visiting_count: z.number().nonnegative(),

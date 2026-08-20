@@ -50,19 +50,27 @@ export function parseSide(value: unknown): "buy" | "sell" | undefined {
   return undefined;
 }
 
+export function rankVisiting(row: Record<string, unknown>): number | undefined {
+  return numField(row, "visiting_count", "v_c");
+}
+
 export function parseTrade(row: Record<string, unknown>, now: number): SmartTrade | null {
   let wallet = strField(row, "maker", "wallet", "wallet_address", "from_address");
   if (!wallet && row.maker_info && typeof row.maker_info === "object") {
     wallet = strField(row.maker_info as Record<string, unknown>, "address");
   }
   const side = parseSide(row.side ?? row.buy_or_sell ?? row.event);
-  const priceChange = numField(row, "price_change", "price_change_percent", "profit");
+  const priceChange = numField(row, "price_change");
+  const amountUsd = numField(row, "amount_usd", "cost_usd");
+  const openOrClose = numField(row, "is_open_or_close");
   if (!wallet || !side) return null;
   const ts = numField(row, "timestamp", "ts", "time", "created_at") ?? now;
   return {
     wallet,
     side,
     ...(priceChange != null ? { price_change: priceChange } : {}),
+    ...(amountUsd != null ? { amount_usd: amountUsd } : {}),
+    ...(openOrClose != null ? { is_open_or_close: openOrClose } : {}),
     ts: ts > 1e12 ? ts : ts * 1000,
   };
 }

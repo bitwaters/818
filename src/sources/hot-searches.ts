@@ -1,12 +1,12 @@
 import type { TokenCache } from "../cache.js";
 import type { Pipeline } from "../core.js";
 import type { Env } from "../env.js";
-import { gmgnRequest, numField, shouldLogGmgnFail } from "../gmgn/http.js";
+import { gmgnRequest, shouldLogGmgnFail } from "../gmgn/http.js";
 import { withInFlight } from "../inflight.js";
 import type { Logger } from "../logger.js";
 import type { Params } from "../params.js";
 import type { Chain } from "../types.js";
-import { tokenAddress, tokenChain } from "./parse.js";
+import { rankVisiting, tokenAddress, tokenChain } from "./parse.js";
 
 function asChain(raw: unknown): Chain | undefined {
   return raw === "sol" || raw === "bsc" ? raw : undefined;
@@ -69,7 +69,7 @@ export function ingestHotSearchGroup(opts: {
     if (!ca) continue;
     const chain = tokenChain(row, opts.groupChain);
     if (!opts.chainEnabled(chain)) continue;
-    const visiting = numField(row, "visiting_count");
+    const visiting = rankVisiting(row);
     const entry =
       visiting != null ? opts.cache.writeVisiting(chain, ca, visiting, opts.now) : opts.cache.upsert(chain, ca);
     if (!entry) continue;

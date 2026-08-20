@@ -26,6 +26,9 @@ sources:
 
 pass:
   visiting_can_boost: false  # 过线已不读此键，只认 cluster
+  min_entry_mc:
+    sol: 10000   # SOL 微盘直接死；缺市值 skip 等 1m 热门
+    bsc: 0       # BSC 暂不按市值砍
 
 flow:
   min_smart_wallets: 2
@@ -38,6 +41,8 @@ tape:
   min_price_change_1m: 20
   # 有新鲜 5m 时必须 > 该值（0 即必须为正）；不在 5m 热门榜则不否决
   min_price_change_5m: 0
+  # 买/卖笔数比 ≥ 此值否决（薄盘对倒）；不把门槛从「买>卖」再拧紧
+  max_buy_sell_ratio: 3
 
 attention:
   # 热搜有新鲜浏览时必须 >= 该值；缺失/过期不挡。离榜不清浏览，留给 TTL。

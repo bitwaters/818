@@ -55,6 +55,17 @@ export function usableVisiting(
   return entry.visiting_count;
 }
 
+export function usableTape1m(
+  entry: CacheEntry,
+  now: number,
+  ttlSec: number,
+): Partial<Tape1m> | undefined {
+  if (!entry.tape) return undefined;
+  if (entry.tape_written_at == null) return entry.tape;
+  if (now - entry.tape_written_at >= ttlSec * 1000) return undefined;
+  return entry.tape;
+}
+
 export function usablePriceChange5m(
   entry: CacheEntry,
   now: number,
@@ -139,13 +150,28 @@ export class TokenCache {
     chain: Chain,
     rawCa: string,
     tape: Partial<Tape1m>,
-    extras?: { symbol?: string; liquidity?: number },
+    extras?: { symbol?: string; liquidity?: number; now?: number },
   ): CacheEntry | null {
     const entry = this.upsert(chain, rawCa);
     if (!entry) return null;
     entry.tape = { ...entry.tape, ...tape };
+    if (extras?.now != null) entry.tape_written_at = extras.now;
     if (extras?.symbol) entry.symbol = extras.symbol;
     if (extras?.liquidity != null) entry.liquidity = extras.liquidity;
+    this.emitMutate(entry);
+    return entry;
+  }
+
+  writeTape5m(
+    chain: Chain,
+    rawCa: string,
+    tape: Partial<Tape1m>,
+    now: number,
+  ): CacheEntry | null {
+    const entry = this.upsert(chain, rawCa);
+    if (!entry) return null;
+    entry.tape5m = { ...entry.tape5m, ...tape };
+    entry.tape5m_written_at = now;
     this.emitMutate(entry);
     return entry;
   }
@@ -164,10 +190,12 @@ export class TokenCache {
     const cleared: CacheEntry[] = [];
     for (const entry of this.map.values()) {
       if (entry.chain !== chain) continue;
-      if (entry.price_change_5m == null) continue;
+      if (entry.price_change_5m == null && entry.tape5m == null) continue;
       if (presentCas.has(entry.ca)) continue;
       entry.price_change_5m = undefined;
       entry.price_change_5m_written_at = undefined;
+      entry.tape5m = undefined;
+      entry.tape5m_written_at = undefined;
       this.emitMutate(entry);
       cleared.push(entry);
     }
